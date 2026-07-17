@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Daymark</title>
+    <link rel="stylesheet" href="./styles.css?v=2" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="任务视图">
+        <div class="window-drag-region" aria-hidden="true"></div>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="m7 12.5 3.1 3.1L17.5 8" /></svg>
+          </span>
+          <span>Daymark</span>
+        </div>
+
+        <p class="nav-heading">任务</p>
+        <nav class="nav-list" aria-label="任务清单">
+          <button class="nav-item is-active" type="button" data-view="inbox">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 6h16v13H4zM4 14h5l1.5 2h3L15 14h5" /></svg>
+            </span>
+            <span>收件箱</span>
+            <span class="nav-count" data-count="inbox">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view="today">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3" /><path d="M8 3v4M16 3v4M4 10h16" /></svg>
+            </span>
+            <span>今天</span>
+            <span class="nav-count" data-count="today">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view="upcoming">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 8v4l2.5 2" /></svg>
+            </span>
+            <span>即将安排</span>
+            <span class="nav-count" data-count="upcoming">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view="all">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h9" /></svg>
+            </span>
+            <span>全部待办</span>
+            <span class="nav-count" data-count="all">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view="completed">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="m8.5 12 2.2 2.2 4.8-5" /></svg>
+            </span>
+            <span>已完成</span>
+            <span class="nav-count" data-count="completed">0</span>
+          </button>
+        </nav>
+
+        <div class="nav-divider"></div>
+        <nav class="nav-list" aria-label="工作回顾">
+          <button class="nav-item" type="button" data-view="review">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M5 19V9M10 19V5M15 19v-7M20 19V3" /></svg>
+            </span>
+            <span>回顾</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-note">
+          <span class="status-dot" aria-hidden="true"></span>
+          <div>
+            <strong id="save-status">正在读取本地数据…</strong>
+            <span>任务默认仅本地；仅主动 AI 时发送勾选内容</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="heading-group">
+            <p class="eyebrow" id="date-label"></p>
+            <h1 id="view-title">收件箱</h1>
+            <p id="view-summary">0 件待安排</p>
+          </div>
+          <label class="search-box" id="search-box" for="search-input">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg>
+            <input id="search-input" type="search" aria-label="搜索任务" placeholder="搜索任务" autocomplete="off" />
+            <kbd>⌘ F</kbd>
+          </label>
+        </header>
+
+        <section class="workspace" id="task-workspace">
+          <form class="quick-add" id="add-form">
+            <span class="add-symbol" aria-hidden="true">+</span>
+            <label class="sr-only" for="task-input">添加任务</label>
+            <input
+              id="task-input"
+              type="text"
+              maxlength="200"
+              autocomplete="off"
+              placeholder="添加一件要做的事…"
+            />
+            <div class="quick-options" aria-label="快速安排">
+              <button type="button" data-quick-date="today" aria-pressed="false">今天</button>
+              <button type="button" data-quick-date="tomorrow" aria-pressed="false">明天</button>
+            </div>
+            <button class="add-button" type="submit" aria-label="创建任务">添加</button>
+          </form>
+
+          <section class="today-capacity" id="today-capacity" hidden aria-label="每日容量">
+            <div>
+              <span class="capacity-label">每日容量</span>
+              <strong id="capacity-summary">已安排 0 / 480 分钟</strong>
+            </div>
+            <div class="capacity-track" aria-hidden="true"><span id="capacity-fill"></span></div>
+            <label>
+              可用
+              <select id="capacity-select">
+                <option value="240">4 小时</option>
+                <option value="360">6 小时</option>
+                <option value="480">8 小时</option>
+                <option value="600">10 小时</option>
+              </select>
+            </label>
+            <div class="end-of-day-control">
+              <label for="end-of-day-enabled">
+                <input id="end-of-day-enabled" type="checkbox" />
+                下班提醒
+              </label>
+              <input id="end-of-day-time" type="time" aria-label="下班提醒时间（中国时间）" value="17:30" />
+              <span>中国时间</span>
+            </div>
+          </section>
+
+          <div class="list-toolbar">
+            <span id="list-label">待安排</span>
+            <span class="toolbar-hint" id="toolbar-hint">先收集，再决定什么时候做</span>
+          </div>
+
+          <div class="task-list" id="task-list" role="list"></div>
+
+          <details class="daily-note" id="daily-note" hidden>
+            <summary>今日备注 <span>可选，用于季度和年度总结</span></summary>
+            <textarea id="daily-note-input" aria-label="今日备注" rows="3" maxlength="1000" placeholder="今天完成了什么、遇到了什么阻塞…"></textarea>
+          </details>
+
+          <div class="empty-state" id="empty-state" hidden>
+            <div class="empty-illustration" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <h2 id="empty-title">收件箱已经清空</h2>
+            <p id="empty-copy">想到的新任务会先放在这里。</p>
+            <button id="empty-action" class="secondary-button" type="button">添加任务</button>
+          </div>
+        </section>
+
+        <section class="review-workspace" id="review-workspace" hidden>
+          <div class="review-heading">
+            <div>
+              <span class="review-kicker">DAYMARK · REVIEW</span>
+              <p>把每天的完成记录沉淀成可回看、可汇报的工作历史。</p>
+            </div>
+            <div class="review-tabs" role="tablist" aria-label="总结范围">
+              <button id="review-tab-daily" type="button" class="is-active" data-review-mode="month" role="tab" aria-controls="review-dashboard" aria-selected="true">月度</button>
+              <button id="review-tab-quarter" type="button" data-review-mode="quarter" role="tab" aria-controls="review-dashboard" aria-selected="false" tabindex="-1">季度</button>
+              <button id="review-tab-year" type="button" data-review-mode="year" role="tab" aria-controls="review-dashboard" aria-selected="false" tabindex="-1">年度</button>
+            </div>
+          </div>
+
+          <section id="review-dashboard" class="review-dashboard" role="tabpanel" aria-labelledby="review-tab-daily">
+            <div class="period-summary">
+              <div class="period-copy">
+                <strong id="review-period-title">本月工作回顾</strong>
+                <span id="record-range-note">日历按月浏览，范围指标随上方选择切换</span>
+              </div>
+              <div class="review-controls" aria-label="报告周期">
+                <label id="year-control">年份 <select id="report-year"></select></label>
+                <label id="quarter-control" hidden>季度 <select id="report-quarter"><option value="1">第一季度</option><option value="2">第二季度</option><option value="3">第三季度</option><option value="4">第四季度</option></select></label>
+              </div>
+              <div class="report-metrics" id="report-metrics" aria-label="当前周期概览">
+                <span class="report-metric" data-metric="active"><strong>0</strong><small>活跃工作日</small></span>
+                <span class="report-metric" data-metric="completed"><strong>0 / 0</strong><small>任务完成</small></span>
+                <span class="report-metric" data-metric="rate"><strong>—</strong><small>完成率</small></span>
+              </div>
+            </div>
+
+            <section class="calendar-surface" aria-labelledby="calendar-heading">
+              <div class="calendar-toolbar">
+                <div class="calendar-copy">
+                  <h2 id="calendar-heading">工作日历</h2>
+                  <p id="holiday-source-note">中国大陆节假日数据加载中…</p>
+                </div>
+                <div class="month-control">
+                  <button type="button" class="icon-button" id="previous-month" aria-label="上一个月">‹</button>
+                  <label for="record-month"><span class="sr-only">浏览月份</span><input id="record-month" type="month" /></label>
+                  <button type="button" class="icon-button" id="next-month" aria-label="下一个月">›</button>
+                </div>
+              </div>
+
+              <div class="calendar-legend" aria-label="日历图例">
+                <span><i class="legend-swatch holiday" aria-hidden="true"></i>法定假日</span>
+                <span><i class="legend-swatch makeup" aria-hidden="true"></i>调休上班</span>
+                <span><i class="legend-swatch schedule" aria-hidden="true"></i>跨期计划</span>
+                <span><i class="legend-swatch progress" aria-hidden="true"></i>完成进度</span>
+              </div>
+              <div class="weekday-grid" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+              <div id="calendar-grid" class="calendar-grid" role="grid" aria-labelledby="calendar-heading"></div>
+
+              <div class="day-detail" id="day-detail" aria-labelledby="day-detail-date">
+                <div class="day-detail-summary">
+                  <div class="day-detail-heading">
+                    <strong id="day-detail-date">选择一天查看记录</strong>
+                    <span id="day-detail-holiday" class="day-badge" hidden></span>
+                  </div>
+                  <span class="day-detail-score"><strong id="day-detail-score">完成 0 · 计划 0</strong></span>
+                  <p id="day-detail-note">当天的计划、完成说明和每日备注会显示在这里。</p>
+                </div>
+                <ul id="day-detail-tasks" class="day-detail-tasks"></ul>
+              </div>
+            </section>
+
+            <section class="ai-report-surface" aria-labelledby="ai-report-heading">
+              <div class="ai-report-heading">
+                <div>
+                  <h2 id="ai-report-heading">工作总结</h2>
+                  <p id="ai-report-range">默认使用本地规则生成；只有主动点击 AI 生成时才会发送所选内容。</p>
+                </div>
+                <span class="draft-badge">本地草稿可用</span>
+              </div>
+
+              <div class="ai-report-workspace">
+                <div class="ai-config">
+                  <div class="ai-config-field">
+                    <label for="ai-model">OpenAI 模型</label>
+                    <input id="ai-model" type="text" maxlength="100" autocomplete="off" placeholder="gpt-5.6-terra" />
+                  </div>
+                  <div class="ai-config-field">
+                    <label for="ai-api-key">API Key</label>
+                    <div class="api-key-row">
+                      <input id="ai-api-key" type="password" maxlength="500" autocomplete="off" placeholder="仅保存到本机安全存储" />
+                      <button type="button" class="secondary-button" id="save-ai-key">保存</button>
+                    </div>
+                    <div class="ai-key-meta">
+                      <span id="ai-key-status">尚未配置 API Key</span>
+                      <button type="button" id="clear-ai-key">移除</button>
+                    </div>
+                  </div>
+                  <fieldset class="ai-source-options">
+                    <legend>发送给 AI 的内容</legend>
+                    <p>任务标题（报告事实基础，始终发送）</p>
+                    <label><input id="include-completion-notes" type="checkbox" checked />完成说明</label>
+                    <label><input id="include-daily-notes" type="checkbox" />每日备注</label>
+                  </fieldset>
+                  <p class="privacy-note">不会发送来源链接、提醒、附件、已删除任务或完整事件历史。API Key 不进入任务数据。</p>
+                  <button type="button" class="primary-button generate-ai-button" id="generate-ai-report">使用 AI 生成总结</button>
+                  <button type="button" class="secondary-button cancel-ai-button" id="cancel-ai-report" hidden>取消生成</button>
+                  <p class="ai-action-note" id="ai-action-note">没有 API Key 也可复制或保存右侧本地总结。</p>
+                </div>
+
+                <div class="report-preview">
+                  <div class="report-preview-heading">
+                    <div>
+                      <span id="report-kind">本地工作报告</span>
+                      <h3 id="report-title">工作总结</h3>
+                    </div>
+                    <div class="report-actions">
+                      <button type="button" class="secondary-button" id="copy-report">复制 Markdown</button>
+                      <button type="button" class="primary-button" id="save-report">保存报告</button>
+                    </div>
+                  </div>
+                  <textarea id="report-output" rows="16" aria-label="工作总结 Markdown" spellcheck="false"></textarea>
+                  <div class="report-footer">
+                    <span id="report-status">基于本地结构化工作记录生成</span>
+                    <span>可编辑后复制或保存</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div id="daily-review-pane" hidden></div>
+            <div id="report-review-pane" hidden></div>
+            <div id="daily-record-list" hidden></div>
+            <div id="report-trend" hidden></div>
+            <article id="report-document" hidden></article>
+          </section>
+        </section>
+      </main>
+
+      <aside class="details-panel" id="details-panel" aria-label="任务详情">
+        <div class="details-empty" id="details-empty">
+          <div class="details-placeholder" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M7 4h8l3 3v13H7z" /><path d="M15 4v4h4M10 12h5M10 16h5" /></svg>
+          </div>
+          <h2>选择一个任务</h2>
+          <p>安排日期、估时和工作领域</p>
+        </div>
+
+        <form class="details-form" id="details-form" hidden>
+          <div class="details-header">
+            <span>任务详情</span>
+            <button class="icon-button mobile-close" id="close-details" type="button" aria-label="关闭详情">×</button>
+          </div>
+
+          <label class="complete-control">
+            <input id="detail-completed" type="checkbox" />
+            <span class="detail-checkbox" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="m7 12.5 3.2 3.2L17.5 8" /></svg>
+            </span>
+            <span id="complete-label">标记为已完成</span>
+          </label>
+
+          <div class="field-group title-field">
+            <label for="detail-title">任务</label>
+            <textarea id="detail-title" rows="2" maxlength="200"></textarea>
+          </div>
+
+          <div class="field-row">
+            <div class="field-group">
+              <label for="detail-planned">计划日期</label>
+              <input id="detail-planned" type="date" />
+            </div>
+            <div class="field-group">
+              <label for="detail-due">最后期限</label>
+              <input id="detail-due" type="date" />
+            </div>
+          </div>
+          <div class="date-shortcuts">
+            <button type="button" data-planned-shortcut="today">今天</button>
+            <button type="button" data-planned-shortcut="tomorrow">明天</button>
+            <button type="button" data-planned-shortcut="clear">移回收件箱</button>
+          </div>
+          <p class="schedule-preview" id="schedule-preview" hidden></p>
+
+          <div class="field-row compact-fields">
+            <div class="field-group">
+              <label for="detail-estimate">预计用时</label>
+              <select id="detail-estimate">
+                <option value="">未估时</option>
+                <option value="15">15 分钟</option>
+                <option value="30">30 分钟</option>
+                <option value="60">1 小时</option>
+                <option value="90">1.5 小时</option>
+                <option value="120">2 小时</option>
+                <option value="240">4 小时</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="detail-area">工作领域</label>
+              <input id="detail-area" type="text" maxlength="60" placeholder="例如：量化项目" list="area-suggestions" />
+              <datalist id="area-suggestions"></datalist>
+            </div>
+          </div>
+
+          <label class="top3-control"><input id="detail-top3" type="checkbox" /><span>★ 标记为当日 Top 3</span></label>
+          <label class="flag-control"><input id="detail-flagged" type="checkbox" /><span>⚑ 添加普通旗标</span></label>
+
+          <fieldset class="field-group priority-group">
+            <legend>优先级</legend>
+            <div class="priority-options">
+              <label><input type="radio" name="priority" value="none" /><span>无</span></label>
+              <label><input type="radio" name="priority" value="low" /><span><i class="priority-dot low"></i>低</span></label>
+              <label><input type="radio" name="priority" value="medium" /><span><i class="priority-dot medium"></i>中</span></label>
+              <label><input type="radio" name="priority" value="high" /><span><i class="priority-dot high"></i>高</span></label>
+            </div>
+          </fieldset>
+
+          <details class="advanced-fields">
+            <summary>重复、提醒与来源</summary>
+            <div class="field-row">
+              <div class="field-group">
+                <label for="detail-repeat">重复</label>
+                <select id="detail-repeat">
+                  <option value="none">不重复</option>
+                  <option value="daily">每天</option>
+                  <option value="weekdays">工作日</option>
+                  <option value="weekly">每周</option>
+                  <option value="monthly">每月</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="detail-reminder">提醒时间（中国时间）</label>
+                <input id="detail-reminder" type="datetime-local" />
+              </div>
+            </div>
+            <div class="field-group">
+              <label for="detail-source">来源链接</label>
+              <input id="detail-source" type="url" maxlength="1000" placeholder="https://…" />
+            </div>
+          </details>
+
+          <div class="field-group notes-field">
+            <label for="detail-notes">备注</label>
+            <textarea id="detail-notes" rows="5" maxlength="2000" placeholder="补充一些细节…"></textarea>
+            <span class="character-count" id="notes-count">0 / 2000</span>
+          </div>
+
+          <div class="field-group completion-note-field" id="completion-note-field" hidden>
+            <label for="detail-completion-note">完成说明</label>
+            <textarea id="detail-completion-note" rows="3" maxlength="500" placeholder="记录成果，季度总结会优先使用…"></textarea>
+          </div>
+
+          <button class="delete-button" id="delete-task" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4h6v3M8 10v8M12 10v8M16 10v8M7 7l1 14h8l1-14" /></svg>
+            删除任务
+          </button>
+        </form>
+      </aside>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+      <span id="toast-message"></span>
+      <button id="undo-button" type="button">撤销</button>
+    </div>
+
+    <pre id="app-debug-state" hidden aria-hidden="true"></pre>
+    <script src="./domain.js"></script>
+    <script src="./planning.js"></script>
+    <script src="./reporting.js"></script>
+    <script src="./calendar.js"></script>
+    <script src="./ai-report.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

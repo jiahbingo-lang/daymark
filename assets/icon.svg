@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="surface" x1="180" y1="130" x2="835" y2="905" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#78957d" />
+      <stop offset="0.55" stop-color="#4e7359" />
+      <stop offset="1" stop-color="#34503d" />
+    </linearGradient>
+    <linearGradient id="shine" x1="290" y1="170" x2="560" y2="610" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="30" stdDeviation="34" flood-color="#263c2d" flood-opacity="0.24" />
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <rect x="78" y="62" width="868" height="868" rx="224" fill="url(#surface)" />
+    <path d="M78 286C78 162 178 62 302 62h420c91 0 169 54 204 132C739 122 477 123 78 286Z" fill="url(#shine)" />
+    <path
+      d="M286 513l153 153 305-326"
+      fill="none"
+      stroke="#f8f7f0"
+      stroke-width="88"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>
