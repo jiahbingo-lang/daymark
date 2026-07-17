@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { createTask } = require('../src/domain');
+const { createTask, STORE_VERSION } = require('../src/domain');
 const { createTodoStore } = require('../src/store');
 
 const NOW = new Date('2026-07-15T18:00:00.000Z');
@@ -29,14 +29,16 @@ function legacyStore(title) {
   };
 }
 
-test('a first launch returns an empty v3 store', async (t) => {
+test('a first launch returns an empty current store', async (t) => {
   const context = await fixture();
   t.after(context.cleanup);
   const result = await context.store.load();
-  assert.equal(result.version, 3);
+  assert.equal(result.version, STORE_VERSION);
   assert.deepEqual(result.tasks, []);
   assert.deepEqual(result.events, []);
   assert.deepEqual(result.dailyArchives, []);
+  assert.deepEqual(result.scheduleBlocks, []);
+  assert.deepEqual(result.timeEntries, []);
   assert.equal(result.meta.historyStartAt, NOW.toISOString());
 });
 
@@ -49,7 +51,7 @@ test('v1 is migrated once, permanently backed up, and Chinese content survives',
   await fs.writeFile(context.filePath, JSON.stringify(payload), 'utf8');
 
   const migrated = await context.store.load();
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, STORE_VERSION);
   assert.equal(migrated.tasks[0].title, '完成桌面版 ✅');
   assert.equal(migrated.tasks[0].notes, '仅保存在本机');
   assert.equal(migrated.events[0].type, 'baseline_imported');
@@ -57,8 +59,29 @@ test('v1 is migrated once, permanently backed up, and Chinese content survives',
   const permanent = JSON.parse(await fs.readFile(`${context.filePath}.v1-backup.json`, 'utf8'));
   assert.equal(permanent.version, 1);
   assert.equal(permanent.tasks[0].title, '完成桌面版 ✅');
-  assert.equal(JSON.parse(await fs.readFile(context.filePath, 'utf8')).version, 3);
+  assert.equal(JSON.parse(await fs.readFile(context.filePath, 'utf8')).version, STORE_VERSION);
   assert.equal((await fs.stat(context.filePath)).mode & 0o777, 0o600);
+});
+
+test('v2 is upgraded once to the current version with a permanent v2 backup', async (t) => {
+  const context = await fixture();
+  t.after(context.cleanup);
+  const payload = {
+    version: 2,
+    meta: { historyStartAt: NOW.toISOString(), timeZone: 'UTC', nextSeq: 1, dailyCapacityMinutes: 480, dailyNotes: {} },
+    tasks: [createTask('保留 v2 任务', { id: 'v2-task', now: NOW })],
+    events: [],
+    dailyArchives: [],
+  };
+  await fs.mkdir(path.dirname(context.filePath), { recursive: true });
+  await fs.writeFile(context.filePath, JSON.stringify(payload), 'utf8');
+
+  const migrated = await context.store.load();
+  assert.equal(migrated.version, STORE_VERSION);
+  assert.deepEqual(migrated.scheduleBlocks, []);
+  assert.deepEqual(migrated.timeEntries, []);
+  assert.deepEqual(migrated.focusSessions, []);
+  assert.equal(JSON.parse(await fs.readFile(`${context.filePath}.v2-backup.json`, 'utf8')).version, 2);
 });
 
 test('forced China timezone migration reindexes events and rebuilds derived archives', async (t) => {
@@ -165,6 +188,38 @@ test('the same event id is idempotent and queued commands cannot race', async (t
   const result = await context.store.load();
   assert.deepEqual(result.tasks.map((task) => task.title), ['A', 'B', 'C']);
   assert.deepEqual(result.events.map((event) => event.eventId), ['A', 'B', 'C']);
+});
+
+test('daily planning and shutdown survive a store restart and remain idempotent', async (t) => {
+  const context = await fixture({ timeZone: 'Asia/Shanghai' });
+  t.after(context.cleanup);
+  const date = '2026-07-16';
+  await context.store.execute({
+    type: 'startDailyPlan', eventId: 'plan-start', occurredAt: NOW, payload: { date },
+  });
+  await context.store.execute({
+    type: 'completeDailyPlan', eventId: 'plan-complete', occurredAt: NOW, payload: { date },
+  });
+  await context.store.execute({
+    type: 'completeDailyShutdown',
+    eventId: 'shutdown-complete',
+    occurredAt: NOW,
+    payload: { date, shutdownNote: '完成交付', tomorrowFocus: '整理复盘' },
+  });
+  await context.store.execute({
+    type: 'completeDailyShutdown',
+    eventId: 'shutdown-complete-again',
+    occurredAt: NOW,
+    payload: { date, shutdownNote: '不应覆盖' },
+  });
+
+  const reopened = createTodoStore(context.filePath, context.config);
+  const result = await reopened.load();
+  assert.equal(result.meta.dailyPlans[date].shutdownNote, '完成交付');
+  assert.equal(result.meta.dailyPlans[date].tomorrowFocus, '整理复盘');
+  assert.equal(Boolean(result.meta.dailyPlans[date].planningCompletedAt), true);
+  assert.equal(Boolean(result.meta.dailyPlans[date].shutdownCompletedAt), true);
+  assert.deepEqual(result.events.map((event) => event.eventId), ['plan-start', 'plan-complete', 'shutdown-complete']);
 });
 
 test('a second write keeps the previous valid v2 file as a backup', async (t) => {

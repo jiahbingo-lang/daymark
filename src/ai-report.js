@@ -68,6 +68,7 @@
 
   function activeRecord(record) {
     return Boolean(String(record?.dailyNotes || '').trim())
+      || safeNumber(record?.summary?.actualMinutes) > 0
       // Task creation is retained in the audit trail, but it must not assign
       // future planned work to the day on which the task was entered.
       || ['planned', 'completed', 'deleted', 'reopened'].some((key) => recordArrays(record, key).length);
@@ -126,6 +127,7 @@
       carried: 0,
       plannedMinutes: 0,
       completedMinutes: 0,
+      actualMinutes: 0,
     };
     const achievements = [];
     const dailyNotes = [];
@@ -142,6 +144,7 @@
         plannedIds: new Set(),
         completedIds: new Set(),
         completedPlannedIds: new Set(),
+        actualMinutes: 0,
       });
       return areaMap.get(area);
     }
@@ -154,6 +157,7 @@
           plannedIds: new Set(),
           completedIds: new Set(),
           completedPlannedIds: new Set(),
+          actualMinutes: 0,
         });
       }
       return trendMap.get(periodName);
@@ -176,12 +180,14 @@
           : task?.estimateMinutes,
       ), 0);
       metrics.completedMinutes += completed.reduce((sum, task) => sum + safeNumber(task?.estimateMinutes), 0);
+      metrics.actualMinutes += safeNumber(record?.summary?.actualMinutes);
 
       const trend = ensureTrend(record.date.slice(0, 7));
       if (active) trend.activeDays += 1;
       planned.forEach((task) => trend.plannedIds.add(taskId(task) || `${record.date}:${task?.title || ''}`));
       completed.forEach((task) => trend.completedIds.add(taskId(task) || `${record.date}:${task?.title || ''}`));
       plannedDone.forEach((task) => trend.completedPlannedIds.add(taskId(task) || `${record.date}:${task?.title || ''}`));
+      trend.actualMinutes += safeNumber(record?.summary?.actualMinutes);
 
       planned.forEach((task) => {
         const area = ensureArea(String(task?.area || '').trim());
@@ -193,6 +199,10 @@
         const area = ensureArea(String(task?.area || '').trim());
         area.completedIds.add(taskId(task) || `${record.date}:${task?.title || ''}`);
         achievements.push(cleanTask(task, record.date));
+      });
+      recordArrays(record, 'actualTime').forEach((entry) => {
+        const area = ensureArea(String(entry?.area || '').trim());
+        area.actualMinutes += safeNumber(entry?.minutes);
       });
       const note = String(record?.dailyNotes || '').trim();
       if (note) dailyNotes.push({ date: record.date, note: note.slice(0, 10000) });
@@ -209,6 +219,7 @@
         completed: area.completedIds.size,
         completedPlanned: area.completedPlannedIds.size,
         completionRate: percentage(area.completedPlannedIds.size, area.plannedIds.size),
+        actualMinutes: area.actualMinutes,
       }))
       .sort((left, right) => right.completed - left.completed || right.planned - left.planned || left.area.localeCompare(right.area, 'zh-CN'));
     const trends = [...trendMap.values()]
@@ -219,6 +230,7 @@
         completed: trend.completedIds.size,
         completedPlanned: trend.completedPlannedIds.size,
         completionRate: percentage(trend.completedPlannedIds.size, trend.plannedIds.size),
+        actualMinutes: trend.actualMinutes,
       }))
       .sort((left, right) => left.period.localeCompare(right.period));
 

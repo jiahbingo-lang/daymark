@@ -54,6 +54,17 @@ test('AI IPC exposes narrow operations and the main process owns source construc
   assert.doesNotMatch(preload, /Authorization/);
 });
 
+test('end-of-day notification uses the narrow preload route to open shutdown', () => {
+  const main = read('main.js');
+  const preload = read('preload.js');
+  const renderer = read('src/renderer.js');
+
+  assert.match(main, /notification\.on\('click', showAndFocusDailyShutdown\)/);
+  assert.match(main, /webContents\.send\('app:open-daily-shutdown'\)/);
+  assert.match(preload, /onOpenDailyShutdown:[\s\S]*app:open-daily-shutdown/);
+  assert.match(renderer, /bridge\.onOpenDailyShutdown\(\(\) =>/);
+});
+
 test('release build enables hardened runtime, ASAR integrity, and dangerous-fuse shutdowns', () => {
   const packageJson = JSON.parse(read('package.json'));
   const build = packageJson.build;

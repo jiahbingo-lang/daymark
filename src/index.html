@@ -8,7 +8,7 @@
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daymark</title>
-    <link rel="stylesheet" href="./styles.css?v=2" />
+    <link rel="stylesheet" href="./styles.css?v=7" />
   </head>
   <body>
     <svg class="tree-sprite" width="0" height="0" aria-hidden="true">
@@ -123,13 +123,19 @@
         </nav>
 
         <div class="nav-divider"></div>
-        <nav class="nav-list" aria-label="专注与回顾">
+        <nav class="nav-list" aria-label="专注、执行与回顾">
           <button class="nav-item" type="button" data-view="focus">
             <span class="nav-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M12 21v-6" /><path d="M12 15c-3.5 0-6-2.4-6-5.5C6 6.4 8.5 3 12 3s6 3.4 6 6.5c0 3.1-2.5 5.5-6 5.5z" /></svg>
             </span>
             <span>专注</span>
             <span class="nav-count" id="focus-nav-count">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view="execution">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3" /><path d="M8 3v4M16 3v4M4 10h16M8 14h3M13 14h3M8 17h5" /></svg>
+            </span>
+            <span>执行日历</span>
           </button>
           <button class="nav-item" type="button" data-view="review">
             <span class="nav-icon" aria-hidden="true">
@@ -207,6 +213,18 @@
               </label>
               <input id="end-of-day-time" type="time" aria-label="下班提醒时间（中国时间）" value="17:30" />
               <span>中国时间</span>
+            </div>
+          </section>
+
+          <section class="daily-ritual-bar" id="daily-ritual-bar" hidden aria-label="每日规划状态">
+            <div class="ritual-status-copy">
+              <span class="ritual-kicker">今日节奏</span>
+              <strong id="daily-ritual-status">今天尚未规划</strong>
+              <small id="daily-ritual-detail">先确定真正做得完的任务，再开始工作。</small>
+            </div>
+            <div class="ritual-actions">
+              <button type="button" class="secondary-button" id="plan-today">规划今天</button>
+              <button type="button" class="primary-button" id="shutdown-today">下班收尾</button>
             </div>
           </section>
 
@@ -297,6 +315,50 @@
             </div>
 
             <p class="focus-note">完成时会收到系统通知 · 中途退出应用视为放弃</p>
+          </div>
+        </section>
+
+        <section class="execution-workspace" id="execution-workspace" hidden>
+          <div class="execution-heading">
+            <div>
+              <span class="review-kicker">DAYMARK · EXECUTE</span>
+              <h2>把计划落到时间里</h2>
+              <p>虚线是自动安排；拖动后会变成实线并锁定。所有时间按中国时间记录。</p>
+            </div>
+            <div class="execution-mode" role="tablist" aria-label="执行日历范围">
+              <button type="button" data-execution-mode="day" role="tab" aria-selected="false">日</button>
+              <button type="button" data-execution-mode="week" class="is-active" role="tab" aria-selected="true">周</button>
+            </div>
+          </div>
+
+          <section class="focus-strip" id="focus-strip" hidden aria-live="polite">
+            <span class="focus-pulse" aria-hidden="true"></span>
+            <div class="focus-copy">
+              <small>正在专注</small>
+              <strong id="focus-task-title">—</strong>
+            </div>
+            <time id="focus-elapsed">00:00:00</time>
+            <button type="button" class="secondary-button" id="stop-focus">暂停</button>
+            <button type="button" class="primary-button" id="complete-focus">完成任务</button>
+          </section>
+
+          <div class="execution-toolbar">
+            <div class="execution-date-nav">
+              <button type="button" class="icon-button" id="execution-previous" aria-label="上一周期">‹</button>
+              <input type="date" id="execution-date" aria-label="执行日历日期" />
+              <button type="button" class="icon-button" id="execution-next" aria-label="下一周期">›</button>
+              <button type="button" class="secondary-button" id="execution-today">回到今天</button>
+            </div>
+            <div class="execution-legend" aria-label="排程图例">
+              <span><i class="execution-legend-line is-auto"></i>自动安排</span>
+              <span><i class="execution-legend-line is-locked"></i>手动锁定</span>
+              <span><i class="execution-legend-line is-risk"></i>期限风险</span>
+            </div>
+          </div>
+
+          <div class="execution-summary" id="execution-summary"></div>
+          <div class="execution-calendar-scroll" id="execution-calendar-scroll">
+            <div class="execution-calendar" id="execution-calendar" aria-label="任务执行时间轴"></div>
           </div>
         </section>
 
@@ -595,18 +657,92 @@
       </aside>
     </div>
 
+    <dialog class="ritual-dialog" id="daily-plan-dialog" aria-labelledby="daily-plan-title">
+      <form method="dialog" id="daily-plan-form">
+        <header class="ritual-dialog-header">
+          <div>
+            <span class="ritual-kicker">MORNING PLAN</span>
+            <h2 id="daily-plan-title">规划今天</h2>
+            <p>系统只提供候选；确认前不会修改任何任务。</p>
+          </div>
+          <button type="button" class="icon-button" data-close-dialog="daily-plan-dialog" aria-label="关闭规划">×</button>
+        </header>
+        <div class="ritual-dialog-body">
+          <div class="ritual-summary" id="daily-plan-summary">请选择今天真正准备推进的任务。</div>
+          <div class="ritual-task-list" id="daily-plan-candidates"></div>
+          <p class="ritual-empty" id="daily-plan-empty" hidden>暂无需要规划的候选任务，可以直接确认今天的计划。</p>
+        </div>
+        <footer class="ritual-dialog-footer">
+          <button type="button" class="secondary-button" data-close-dialog="daily-plan-dialog">稍后再说</button>
+          <button type="submit" class="primary-button" id="confirm-daily-plan">确认今日计划</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="ritual-dialog manual-time-dialog" id="manual-time-dialog" aria-labelledby="manual-time-title">
+      <form method="dialog" id="manual-time-form">
+        <header class="ritual-dialog-header">
+          <div>
+            <span class="ritual-kicker">ACTUAL TIME</span>
+            <h2 id="manual-time-title">补录实际用时</h2>
+            <p id="manual-time-task-title">选择任务后补录</p>
+          </div>
+          <button type="button" class="icon-button" data-close-dialog="manual-time-dialog" aria-label="关闭补录">×</button>
+        </header>
+        <div class="ritual-dialog-body manual-time-fields">
+          <input type="hidden" id="manual-time-task-id" />
+          <label>记录日期（中国时间）<input type="date" id="manual-time-date" required /></label>
+          <label>实际用时（分钟）<input type="number" id="manual-time-minutes" min="1" max="1440" step="5" value="30" required /></label>
+          <label>说明（可选）<input type="text" id="manual-time-note" maxlength="300" placeholder="例如：需求梳理与方案确认" /></label>
+        </div>
+        <footer class="ritual-dialog-footer">
+          <button type="button" class="secondary-button" data-close-dialog="manual-time-dialog">取消</button>
+          <button type="button" class="primary-button" id="save-manual-time">保存用时</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="ritual-dialog shutdown-dialog" id="daily-shutdown-dialog" aria-labelledby="daily-shutdown-title">
+      <form method="dialog" id="daily-shutdown-form">
+        <header class="ritual-dialog-header">
+          <div>
+            <span class="ritual-kicker">DAILY SHUTDOWN</span>
+            <h2 id="daily-shutdown-title">今日收尾</h2>
+            <p>逐项决定未完成事项的去向，然后安心下班。</p>
+          </div>
+          <button type="button" class="icon-button" data-close-dialog="daily-shutdown-dialog" aria-label="关闭收尾">×</button>
+        </header>
+        <div class="ritual-dialog-body">
+          <div class="ritual-summary" id="daily-shutdown-summary">正在读取未完成事项…</div>
+          <div class="shutdown-task-list" id="daily-shutdown-tasks"></div>
+          <p class="ritual-empty" id="daily-shutdown-empty" hidden>今天的事项都处理好了。</p>
+          <div class="shutdown-notes">
+            <label>今日成果<textarea id="shutdown-note" rows="2" maxlength="10000" placeholder="今天完成了什么…"></textarea></label>
+            <label>阻塞记录<textarea id="shutdown-blocker-note" rows="2" maxlength="5000" placeholder="有哪些事情被阻塞…"></textarea></label>
+            <label>明日重点<input id="shutdown-tomorrow-focus" type="text" maxlength="2000" placeholder="明天最重要的一件事…" /></label>
+          </div>
+        </div>
+        <footer class="ritual-dialog-footer">
+          <span>确认后，当天不再发送下班提醒。</span>
+          <button type="submit" class="primary-button" id="confirm-daily-shutdown">完成今日收尾</button>
+        </footer>
+      </form>
+    </dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite" hidden>
       <span id="toast-message"></span>
       <button id="undo-button" type="button">撤销</button>
     </div>
 
     <pre id="app-debug-state" hidden aria-hidden="true"></pre>
-    <script src="./domain.js"></script>
-    <script src="./focus.js"></script>
-    <script src="./planning.js"></script>
-    <script src="./reporting.js"></script>
-    <script src="./calendar.js"></script>
-    <script src="./ai-report.js"></script>
-    <script src="./renderer.js"></script>
+    <script src="./domain.js?v=4"></script>
+    <script src="./focus.js?v=1"></script>
+    <script src="./planning.js?v=3"></script>
+    <script src="./execution.js?v=3"></script>
+    <script src="./daily-planning.js?v=2"></script>
+    <script src="./reporting.js?v=4"></script>
+    <script src="./calendar.js?v=3"></script>
+    <script src="./ai-report.js?v=3"></script>
+    <script src="./renderer.js?v=10"></script>
   </body>
 </html>

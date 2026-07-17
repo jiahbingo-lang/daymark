@@ -1,8 +1,9 @@
 (function exposeDomain(global) {
-  const STORE_VERSION = 3;
+  const STORE_VERSION = 4;
   const PRIORITIES = ['none', 'low', 'medium', 'high'];
   const VIEWS = ['all', 'inbox', 'today', 'upcoming', 'completed'];
   const FOCUS_SESSION_STATUSES = ['running', 'completed', 'abandoned'];
+  const TIME_ENTRY_SOURCES = ['focus', 'manual', 'pomodoro'];
   const FOCUS_MIN_MINUTES = 5;
   const FOCUS_MAX_MINUTES = 180;
   const DEFAULT_FOCUS_SETTINGS = Object.freeze({
@@ -278,6 +279,19 @@
       .sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
   }
 
+  // The pomodoro timer and the stopwatch both measure wall-clock focus time, so
+  // letting them run together would count the same minutes twice. A running
+  // pomodoro has no time entry until it completes, and the stopwatch keeps no
+  // focus session, so neither can see the other through its own records.
+  function assertNoFocusInProgress(store) {
+    if (store.focusSessions.some((session) => session.status === 'running')) {
+      throw new Error('A focus session is already running');
+    }
+    if (store.timeEntries.some((entry) => !entry.endedAt)) {
+      throw new Error('A focus session is already running');
+    }
+  }
+
   function focusSessionEnd(session) {
     const started = new Date(session.startedAt).getTime();
     return started + session.plannedMinutes * 60_000 + (Number(session.pausedMs) || 0);
@@ -288,6 +302,133 @@
     const reference = session.pausedAt ? new Date(session.pausedAt).getTime() : toDate(at).getTime();
     const activeMs = reference - started - (Number(session.pausedMs) || 0);
     return Math.max(0, Math.min(session.plannedMinutes, Math.floor(activeMs / 60_000)));
+  }
+
+  function sanitizeTaskIdList(value) {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(value
+      .map((item) => normalizeOptionalText(item, 120))
+      .filter(Boolean))]
+      .slice(0, 200);
+  }
+
+  function emptyDailyPlan(date) {
+    return {
+      date,
+      planningStartedAt: null,
+      planningCompletedAt: null,
+      shutdownCompletedAt: null,
+      shutdownNote: '',
+      blockerNote: '',
+      tomorrowFocus: '',
+      blockedTaskIds: [],
+    };
+  }
+
+  function sanitizeDailyPlan(input, date) {
+    const safeDate = normalizeDate(date || input?.date);
+    if (!safeDate) return null;
+    const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+    return {
+      date: safeDate,
+      planningStartedAt: normalizeIso(source.planningStartedAt, null),
+      planningCompletedAt: normalizeIso(source.planningCompletedAt, null),
+      shutdownCompletedAt: normalizeIso(source.shutdownCompletedAt, null),
+      shutdownNote: normalizeText(source.shutdownNote, 10000),
+      blockerNote: normalizeText(source.blockerNote, 5000),
+      tomorrowFocus: normalizeText(source.tomorrowFocus, 2000),
+      blockedTaskIds: sanitizeTaskIdList(source.blockedTaskIds),
+    };
+  }
+
+  function sanitizeDailyPlans(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const result = {};
+    Object.entries(value).forEach(([date, plan]) => {
+      const safePlan = sanitizeDailyPlan(plan, date);
+      if (safePlan) result[safePlan.date] = safePlan;
+    });
+    return result;
+  }
+
+  function sanitizeScheduleBlock(input, options = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const id = normalizeOptionalText(input.id, 120);
+    const taskId = normalizeOptionalText(input.taskId, 120);
+    const date = normalizeDate(input.date);
+    const startMinute = normalizeInteger(input.startMinute, { min: 0, max: 1435, fallback: null });
+    const requestedDuration = normalizeInteger(input.durationMinutes, { min: 5, max: 720, fallback: null });
+    if (!id || !taskId || !date || startMinute === null || requestedDuration === null) return null;
+    const durationMinutes = Math.min(requestedDuration, 1440 - startMinute);
+    const fallbackTimestamp = isoNow(options.now);
+    const createdAt = normalizeIso(input.createdAt, fallbackTimestamp);
+    return {
+      id,
+      taskId,
+      date,
+      startMinute,
+      durationMinutes,
+      source: input.source === 'auto' ? 'auto' : 'manual',
+      locked: input.locked !== false,
+      createdAt,
+      updatedAt: normalizeIso(input.updatedAt, createdAt),
+    };
+  }
+
+  function sanitizeScheduleBlocks(value, options = {}) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    return value
+      .map((block) => sanitizeScheduleBlock(block, options))
+      .filter((block) => {
+        if (!block || seen.has(block.id)) return false;
+        seen.add(block.id);
+        return true;
+      })
+      .slice(0, 20_000);
+  }
+
+  function sanitizeTimeEntry(input, options = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const id = normalizeOptionalText(input.id, 120);
+    const taskId = normalizeOptionalText(input.taskId, 120);
+    const startedAt = normalizeIso(input.startedAt, null);
+    // taskId is optional because a pomodoro may run unattached to any task.
+    // Stopwatch and manual entries still resolve their task before getting here.
+    if (!id || !startedAt) return null;
+    const endedAt = normalizeIso(input.endedAt, null);
+    const calculatedSeconds = endedAt
+      ? Math.max(0, Math.round((new Date(endedAt) - new Date(startedAt)) / 1000))
+      : 0;
+    const durationSeconds = normalizeInteger(input.durationSeconds, {
+      min: 0,
+      max: 31_536_000,
+      fallback: calculatedSeconds,
+    });
+    const timeZone = normalizeTimeZone(options.timeZone);
+    return {
+      id,
+      taskId,
+      startedAt,
+      endedAt,
+      durationSeconds,
+      reportingDate: normalizeDate(input.reportingDate) || dateInTimeZone(startedAt, timeZone),
+      source: TIME_ENTRY_SOURCES.includes(input.source) ? input.source : 'focus',
+      note: normalizeText(input.note, 1000),
+    };
+  }
+
+  function sanitizeTimeEntries(value, options = {}) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    return value
+      .map((entry) => sanitizeTimeEntry(entry, options))
+      .filter((entry) => {
+        if (!entry || seen.has(entry.id)) return false;
+        seen.add(entry.id);
+        return true;
+      })
+      .slice(0, 100_000);
   }
 
   function sanitizeEvent(input) {
@@ -350,11 +491,14 @@
         endOfDayReminderLastDate: null,
         dailyNotes: {},
         focusSettings: sanitizeFocusSettings(null),
+        dailyPlans: {},
       },
       tasks,
       events,
       dailyArchives: [],
       focusSessions: [],
+      scheduleBlocks: [],
+      timeEntries: [],
     };
   }
 
@@ -394,24 +538,30 @@
         endOfDayReminderLastDate: normalizeDate(metaInput.endOfDayReminderLastDate),
         dailyNotes: sanitizeDailyNotes(metaInput.dailyNotes),
         focusSettings: sanitizeFocusSettings(metaInput.focusSettings),
+        dailyPlans: sanitizeDailyPlans(metaInput.dailyPlans),
       },
       tasks,
       events,
       dailyArchives: sanitizeArchives(input?.dailyArchives),
       focusSessions: sanitizeFocusSessions(input?.focusSessions),
+      scheduleBlocks: sanitizeScheduleBlocks(input?.scheduleBlocks, { now: fallbackDate }),
+      timeEntries: sanitizeTimeEntries(input?.timeEntries, { timeZone }),
     };
   }
 
   function sanitizeStore(input, options = {}) {
     const rawVersion = input?.version;
     const version = rawVersion === undefined || rawVersion === null ? 1 : Number(rawVersion);
-    // Version 3 added focus sessions on top of the v2 event-sourced shape, so
-    // the same sanitizer upgrades v2 files by filling focus defaults.
-    if (!Number.isInteger(version) || ![1, 2, STORE_VERSION].includes(version)) {
+    // Two incompatible v3 files exist in the wild: the released daily-planning
+    // build wrote dailyPlans/scheduleBlocks/timeEntries, while the focus-timer
+    // build wrote focusSessions/focusSettings. v4 is the union of both halves,
+    // and the sanitizer below defaults whichever half a file lacks, so either
+    // v3 upgrades without having to tell the two apart.
+    if (!Number.isInteger(version) || ![1, 2, 3, STORE_VERSION].includes(version)) {
       throw new Error(`Unsupported store version: ${rawVersion}`);
     }
-    if (version >= 2) return sanitizeV2(input, options);
-    return migrateV1(input, options);
+    if (version === 1) return migrateV1(input, options);
+    return sanitizeV2(input, options);
   }
 
   function updateTask(task, patch, now = new Date()) {
@@ -638,6 +788,15 @@
       'completeFocusSession',
       'abandonFocusSession',
       'setFocusSettings',
+      'startDailyPlan',
+      'completeDailyPlan',
+      'completeDailyShutdown',
+      'upsertScheduleBlock',
+      'deleteScheduleBlock',
+      'startFocus',
+      'stopFocus',
+      'addManualTime',
+      'deleteTimeEntry',
     ];
     if (!supported.includes(command.type)) throw new Error(`Unsupported command: ${command.type}`);
 
@@ -650,11 +809,17 @@
     const occurredAt = occurredDate.toISOString();
     let next = {
       ...store,
-      meta: { ...store.meta, dailyNotes: { ...store.meta.dailyNotes } },
+      meta: {
+        ...store.meta,
+        dailyNotes: { ...store.meta.dailyNotes },
+        dailyPlans: { ...store.meta.dailyPlans },
+      },
       tasks: [...store.tasks],
       events: [...store.events],
       dailyArchives: [...store.dailyArchives],
       focusSessions: [...store.focusSessions],
+      scheduleBlocks: [...store.scheduleBlocks],
+      timeEntries: [...store.timeEntries],
     };
     let taskId = normalizeOptionalText(command.taskId || commandValue(command, 'id'), 120);
     let before = null;
@@ -782,9 +947,7 @@
       ) {
         throw new Error(`Focus session length must be ${FOCUS_MIN_MINUTES}-${FOCUS_MAX_MINUTES} minutes`);
       }
-      if (next.focusSessions.some((session) => session.status === 'running')) {
-        throw new Error('A focus session is already running');
-      }
+      assertNoFocusInProgress(next);
       const linkedTaskId = normalizeOptionalText(commandValue(command, 'taskId'), 120);
       if (linkedTaskId && !activeTaskById(next.tasks, linkedTaskId)) {
         throw new Error(`Task not found: ${linkedTaskId}`);
@@ -853,6 +1016,25 @@
       next.focusSessions = next.focusSessions.map((candidate) => (candidate.id === session.id ? safeSession : candidate));
       after = safeSession;
       taskId = session.taskId;
+      // A finished pomodoro records a time entry so focus minutes have one
+      // source of truth shared with the stopwatch. An abandoned session records
+      // none: its minutes deliberately do not count towards any statistic.
+      if (safeSession.status === 'completed') {
+        const entryId = normalizeOptionalText(commandValue(command, 'entryId'), 120)
+          || `time-${safeSession.id}`.slice(0, 120);
+        if (!next.timeEntries.some((entry) => entry.id === entryId)) {
+          const entry = sanitizeTimeEntry({
+            id: entryId,
+            taskId: safeSession.taskId,
+            startedAt: safeSession.startedAt,
+            endedAt: safeSession.endedAt,
+            durationSeconds: safeSession.focusedMinutes * 60,
+            reportingDate: safeSession.reportingDate,
+            source: 'pomodoro',
+          }, { timeZone: next.meta.timeZone });
+          if (entry) next.timeEntries.push(entry);
+        }
+      }
     } else if (command.type === 'setFocusSettings') {
       const payload = commandPayload(command);
       const known = ['defaultMinutes', 'strictMode', 'completionNotification', 'dailyGoalMinutes'];
@@ -862,6 +1044,146 @@
       next.meta.focusSettings = sanitizeFocusSettings({ ...next.meta.focusSettings, ...payload });
       after = { ...next.meta.focusSettings };
       taskId = null;
+    } else if (['startDailyPlan', 'completeDailyPlan', 'completeDailyShutdown'].includes(command.type)) {
+      const date =
+        normalizeDate(commandValue(command, 'date') || commandValue(command, 'reportingDate')) ||
+        dateInTimeZone(occurredDate, next.meta.timeZone);
+      const previous = sanitizeDailyPlan(next.meta.dailyPlans[date], date) || emptyDailyPlan(date);
+      if (
+        (command.type === 'startDailyPlan' && previous.planningStartedAt) ||
+        (command.type === 'completeDailyPlan' && previous.planningCompletedAt) ||
+        (command.type === 'completeDailyShutdown' && previous.shutdownCompletedAt)
+      ) return store;
+      const plan = { ...previous, blockedTaskIds: [...previous.blockedTaskIds] };
+      before = jsonClone(previous);
+      if (command.type === 'startDailyPlan') {
+        plan.planningStartedAt = plan.planningStartedAt || occurredAt;
+      } else if (command.type === 'completeDailyPlan') {
+        plan.planningStartedAt = plan.planningStartedAt || occurredAt;
+        plan.planningCompletedAt = occurredAt;
+      } else {
+        const shutdownNote = commandValue(command, 'shutdownNote');
+        const blockerNote = commandValue(command, 'blockerNote');
+        const tomorrowFocus = commandValue(command, 'tomorrowFocus');
+        const blockedTaskIds = commandValue(command, 'blockedTaskIds');
+        plan.shutdownCompletedAt = occurredAt;
+        if (shutdownNote !== undefined) plan.shutdownNote = normalizeText(shutdownNote, 10000);
+        if (blockerNote !== undefined) plan.blockerNote = normalizeText(blockerNote, 5000);
+        if (tomorrowFocus !== undefined) plan.tomorrowFocus = normalizeText(tomorrowFocus, 2000);
+        if (blockedTaskIds !== undefined) {
+          const activeIds = new Set(next.tasks.filter((task) => !task.deletedAt).map((task) => task.id));
+          plan.blockedTaskIds = sanitizeTaskIdList(blockedTaskIds).filter((id) => activeIds.has(id));
+        }
+      }
+      after = sanitizeDailyPlan(plan, date);
+      next.meta.dailyPlans[date] = after;
+      taskId = null;
+    } else if (command.type === 'upsertScheduleBlock') {
+      const task = activeTaskById(next.tasks, taskId);
+      if (!task || task.status === 'completed' || !task.plannedDate) {
+        throw new Error(`Schedulable task not found: ${taskId}`);
+      }
+      const blockId = normalizeOptionalText(commandValue(command, 'blockId') || commandValue(command, 'id'), 120)
+        || makeId('block');
+      const existing = next.scheduleBlocks.find((block) => block.id === blockId) || null;
+      if (existing && existing.taskId !== task.id) throw new Error('Schedule block task cannot change');
+      const block = sanitizeScheduleBlock({
+        ...existing,
+        id: blockId,
+        taskId: task.id,
+        date: commandValue(command, 'date'),
+        startMinute: commandValue(command, 'startMinute'),
+        durationMinutes: commandValue(command, 'durationMinutes'),
+        source: 'manual',
+        locked: commandValue(command, 'locked') !== false,
+        createdAt: existing?.createdAt || occurredAt,
+        updatedAt: occurredAt,
+      }, { now: occurredDate });
+      if (!block) throw new Error('Invalid schedule block');
+      if (block.date < task.plannedDate || (task.dueDate && block.date > task.dueDate)) {
+        throw new Error('Schedule block must stay inside the task date range');
+      }
+      const blockEnd = block.startMinute + block.durationMinutes;
+      const conflict = next.scheduleBlocks.find((candidate) => (
+        candidate.id !== block.id
+        && candidate.locked
+        && block.locked
+        && candidate.date === block.date
+        && candidate.startMinute < blockEnd
+        && block.startMinute < candidate.startMinute + candidate.durationMinutes
+      ));
+      if (conflict) throw new Error('Schedule block conflicts with a locked block');
+      before = existing;
+      after = block;
+      next.scheduleBlocks = existing
+        ? next.scheduleBlocks.map((item) => (item.id === block.id ? block : item))
+        : [...next.scheduleBlocks, block];
+    } else if (command.type === 'deleteScheduleBlock') {
+      const blockId = normalizeOptionalText(commandValue(command, 'blockId') || commandValue(command, 'id'), 120);
+      const existing = next.scheduleBlocks.find((block) => block.id === blockId) || null;
+      if (!existing) throw new Error(`Schedule block not found: ${blockId}`);
+      taskId = existing.taskId;
+      before = existing;
+      after = null;
+      next.scheduleBlocks = next.scheduleBlocks.filter((block) => block.id !== blockId);
+    } else if (command.type === 'startFocus') {
+      const task = activeTaskById(next.tasks, taskId);
+      if (!task || task.status === 'completed') throw new Error(`Focusable task not found: ${taskId}`);
+      assertNoFocusInProgress(next);
+      const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120)
+        || makeId('time');
+      if (next.timeEntries.some((entry) => entry.id === entryId)) throw new Error(`Time entry already exists: ${entryId}`);
+      after = sanitizeTimeEntry({
+        id: entryId,
+        taskId: task.id,
+        startedAt: occurredAt,
+        endedAt: null,
+        durationSeconds: 0,
+        reportingDate: dateInTimeZone(occurredDate, next.meta.timeZone),
+        source: 'focus',
+      }, { timeZone: next.meta.timeZone });
+      next.timeEntries.push(after);
+    } else if (command.type === 'stopFocus') {
+      const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120);
+      const existing = next.timeEntries.find((entry) => !entry.endedAt && (!entryId || entry.id === entryId)) || null;
+      if (!existing) throw new Error('Running focus session not found');
+      taskId = existing.taskId;
+      before = existing;
+      after = sanitizeTimeEntry({
+        ...existing,
+        endedAt: occurredAt,
+        durationSeconds: Math.max(1, Math.round((occurredDate - new Date(existing.startedAt)) / 1000)),
+      }, { timeZone: next.meta.timeZone });
+      next.timeEntries = next.timeEntries.map((entry) => (entry.id === existing.id ? after : entry));
+    } else if (command.type === 'addManualTime') {
+      const task = activeTaskById(next.tasks, taskId);
+      if (!task) throw new Error(`Task not found: ${taskId}`);
+      const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120)
+        || makeId('time');
+      if (next.timeEntries.some((entry) => entry.id === entryId)) throw new Error(`Time entry already exists: ${entryId}`);
+      const date = normalizeDate(commandValue(command, 'date')) || dateInTimeZone(occurredDate, next.meta.timeZone);
+      const minutes = normalizeInteger(commandValue(command, 'minutes'), { min: 1, max: 1440, fallback: null });
+      if (minutes === null) throw new Error('Manual time must be between 1 and 1440 minutes');
+      after = sanitizeTimeEntry({
+        id: entryId,
+        taskId: task.id,
+        startedAt: occurredAt,
+        endedAt: occurredAt,
+        durationSeconds: minutes * 60,
+        reportingDate: date,
+        source: 'manual',
+        note: commandValue(command, 'note'),
+      }, { timeZone: next.meta.timeZone });
+      next.timeEntries.push(after);
+    } else if (command.type === 'deleteTimeEntry') {
+      const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120);
+      const existing = next.timeEntries.find((entry) => entry.id === entryId) || null;
+      if (!existing) throw new Error(`Time entry not found: ${entryId}`);
+      if (!existing.endedAt) throw new Error('Stop a running focus session before deleting it');
+      taskId = existing.taskId;
+      before = existing;
+      after = null;
+      next.timeEntries = next.timeEntries.filter((entry) => entry.id !== entryId);
     }
 
     assertTop3Limit(next.tasks);

@@ -35,6 +35,7 @@ function createTodoStore(filePath, options = {}) {
   }
 
   function migrateTimeZone(raw) {
+    // Every version from 2 up is event-sourced and can be re-attributed.
     const eventSourced = Number(raw?.version) >= 2;
     if (!forceTimeZone || !eventSourced || raw?.meta?.timeZone === timeZone) {
       return { value: raw, migrated: false };
@@ -66,9 +67,9 @@ function createTodoStore(filePath, options = {}) {
     return sanitizeStore(migrated, { now: nowDate(), timeZone });
   }
 
-  async function preserveV1(raw) {
-    if (Number(raw?.version ?? 1) !== 1) return;
-    const backupPath = `${filePath}.v1-backup.json`;
+  async function preserveVersion(raw, version) {
+    if (Number(raw?.version ?? 1) !== version) return;
+    const backupPath = `${filePath}.v${version}-backup.json`;
     try {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(backupPath, `${JSON.stringify(raw, null, 2)}\n`, {
@@ -136,11 +137,13 @@ function createTodoStore(filePath, options = {}) {
   async function loadCandidate(target, { persistMigration = false } = {}) {
     const raw = await readRaw(target);
     const rawVersion = Number(raw?.version ?? 1);
+    // Refusing a newer file is what stops an older Daymark from silently
+    // rewriting data whose fields it does not know about.
     if (rawVersion > STORE_VERSION) throw new Error(`Unsupported store version: ${raw.version}`);
-    if (persistMigration && rawVersion === 1) await preserveV1(raw);
+    if (persistMigration && rawVersion < STORE_VERSION) await preserveVersion(raw, rawVersion);
     const timeZoneMigration = migrateTimeZone(raw);
     const safe = sanitize(timeZoneMigration.value);
-    if (persistMigration && (rawVersion === 1 || timeZoneMigration.migrated)) return write(safe);
+    if (persistMigration && (rawVersion < STORE_VERSION || timeZoneMigration.migrated)) return write(safe);
     currentStore = safe;
     return clone(safe);
   }

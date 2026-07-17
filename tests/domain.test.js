@@ -208,7 +208,10 @@ test('v1 migration is idempotent and future versions fail closed', () => {
   assert.equal(migrated.tasks[0].dueDate, '2026-07-20');
   assert.equal(migrated.events[0].eventId.startsWith('v1-baseline-1-'), true);
   assert.deepEqual(migrated.dailyArchives, []);
-  assert.throws(() => sanitizeStore({ version: 4, tasks: [] }), /Unsupported store version/);
+  assert.throws(
+    () => sanitizeStore({ version: STORE_VERSION + 1, tasks: [] }),
+    /Unsupported store version/,
+  );
 });
 
 test('task v2 fields are sanitized and preserved in browser-safe data', () => {
@@ -427,6 +430,98 @@ test('end-of-day reminder settings and delivery date are persisted as audited me
   }), /HH:mm/);
 });
 
+test('daily planning and shutdown lifecycle is persisted without copying task state', () => {
+  let store = sanitizeStore({ version: 1, tasks: [] }, { now: NOW, timeZone: 'Asia/Shanghai' });
+  assert.deepEqual(store.meta.dailyPlans, {});
+
+  store = applyCommand(store, {
+    type: 'startDailyPlan', eventId: 'plan-start', occurredAt: '2026-07-16T00:00:00.000Z',
+    payload: { date: '2026-07-16' },
+  });
+  store = applyCommand(store, {
+    type: 'completeDailyPlan', eventId: 'plan-complete', occurredAt: '2026-07-16T00:05:00.000Z',
+    payload: { date: '2026-07-16' },
+  });
+  store = applyCommand(store, {
+    type: 'completeDailyShutdown', eventId: 'shutdown-complete', occurredAt: '2026-07-16T10:00:00.000Z',
+    payload: {
+      date: '2026-07-16',
+      shutdownNote: '完成核心交付',
+      blockerNote: '等待外部数据',
+      tomorrowFocus: '处理验收反馈',
+      blockedTaskIds: ['missing-task'],
+    },
+  });
+
+  const plan = store.meta.dailyPlans['2026-07-16'];
+  assert.equal(plan.planningStartedAt, '2026-07-16T00:00:00.000Z');
+  assert.equal(plan.planningCompletedAt, '2026-07-16T00:05:00.000Z');
+  assert.equal(plan.shutdownCompletedAt, '2026-07-16T10:00:00.000Z');
+  assert.equal(plan.shutdownNote, '完成核心交付');
+  assert.equal(plan.blockerNote, '等待外部数据');
+  assert.equal(plan.tomorrowFocus, '处理验收反馈');
+  assert.deepEqual(plan.blockedTaskIds, []);
+  assert.deepEqual(store.events.slice(-3).map((event) => event.type), [
+    'startDailyPlan', 'completeDailyPlan', 'completeDailyShutdown',
+  ]);
+
+  const retried = applyCommand(store, {
+    type: 'completeDailyShutdown', eventId: 'shutdown-complete', occurredAt: '2026-07-16T11:00:00.000Z',
+    payload: { date: '2026-07-16', shutdownNote: '不应覆盖' },
+  });
+  assert.deepEqual(retried, store);
+
+  const semanticRetry = applyCommand(store, {
+    type: 'completeDailyShutdown', eventId: 'shutdown-complete-again', occurredAt: '2026-07-16T12:00:00.000Z',
+    payload: { date: '2026-07-16', shutdownNote: '不同事件 ID 也不应覆盖' },
+  });
+  assert.deepEqual(semanticRetry, store);
+
+  const planRetry = applyCommand(store, {
+    type: 'completeDailyPlan', eventId: 'plan-complete-again', occurredAt: '2026-07-16T12:00:00.000Z',
+    payload: { date: '2026-07-16' },
+  });
+  assert.deepEqual(planRetry, store);
+});
+
+test('schedule blocks and multi-segment time entries are audited and conflict-safe', () => {
+  let store = sanitizeStore({ version: 2, tasks: [] }, { now: NOW, timeZone: 'Asia/Shanghai' });
+  assert.equal(store.version, STORE_VERSION);
+  assert.deepEqual(store.scheduleBlocks, []);
+  assert.deepEqual(store.timeEntries, []);
+  store = applyCommand(store, {
+    type: 'create', eventId: 'create-execution', taskId: 'execution-task', occurredAt: NOW,
+    payload: { title: '执行任务', plannedDate: '2026-07-20', dueDate: '2026-07-21', estimateMinutes: 120 },
+  });
+  store = applyCommand(store, {
+    type: 'upsertScheduleBlock', eventId: 'block-one', taskId: 'execution-task', occurredAt: NOW,
+    payload: { blockId: 'block-one', date: '2026-07-20', startMinute: 540, durationMinutes: 60, locked: true },
+  });
+  assert.equal(store.scheduleBlocks[0].startMinute, 540);
+  assert.throws(() => applyCommand(store, {
+    type: 'upsertScheduleBlock', eventId: 'block-conflict', taskId: 'execution-task', occurredAt: NOW,
+    payload: { blockId: 'block-two', date: '2026-07-20', startMinute: 570, durationMinutes: 60, locked: true },
+  }), /conflicts/);
+
+  store = applyCommand(store, {
+    type: 'startFocus', eventId: 'focus-start', taskId: 'execution-task', occurredAt: '2026-07-20T01:00:00.000Z',
+    payload: { entryId: 'focus-one' },
+  });
+  assert.equal(store.timeEntries[0].endedAt, null);
+  store = applyCommand(store, {
+    type: 'stopFocus', eventId: 'focus-stop', taskId: 'execution-task', occurredAt: '2026-07-20T01:45:00.000Z',
+    payload: { entryId: 'focus-one' },
+  });
+  assert.equal(store.timeEntries[0].durationSeconds, 2700);
+  store = applyCommand(store, {
+    type: 'addManualTime', eventId: 'manual-time', taskId: 'execution-task', occurredAt: '2026-07-20T02:00:00.000Z',
+    payload: { entryId: 'manual-one', date: '2026-07-20', minutes: 30, note: '补录' },
+  });
+  assert.equal(store.timeEntries[1].durationSeconds, 1800);
+  assert.equal(store.events.slice(-5).map((event) => event.type).join(','),
+    'create,upsertScheduleBlock,startFocus,stopFocus,addManualTime');
+});
+
 test('deleted tasks can be restored and reminder delivery is persisted', () => {
   let store = sanitizeStore({ version: 1, tasks: [] }, { now: NOW, timeZone: 'UTC' });
   store = applyCommand(store, {
@@ -457,7 +552,7 @@ test('the domain bundle exposes the same API directly in a browser context', () 
   const context = vm.createContext({ window: {} });
   vm.runInContext(source, context);
 
-  assert.equal(context.window.TodoDomain.STORE_VERSION, 3);
+  assert.equal(context.window.TodoDomain.STORE_VERSION, STORE_VERSION);
   assert.equal(typeof context.window.TodoDomain.applyCommand, 'function');
   assert.equal(context.window.TodoDomain.createTask('浏览器任务', { id: 'browser-task' }).title, '浏览器任务');
 });

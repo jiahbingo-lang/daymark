@@ -4,9 +4,11 @@ const {
   sanitizeStore,
   applyCommand,
   focusSessionEnd,
+  STORE_VERSION,
 } = require('../src/domain');
 const Focus = require('../src/focus');
 const Reporting = require('../src/reporting');
+const Calendar = require('../src/calendar');
 
 const NOW = new Date('2026-07-17T02:00:00.000Z');
 
@@ -31,9 +33,9 @@ function storeWithSession() {
   return store;
 }
 
-test('v1 and v2 stores upgrade to v3 with focus defaults', () => {
+test('v1 and v2 stores upgrade to the current version with focus defaults', () => {
   const fromV1 = emptyStore();
-  assert.equal(fromV1.version, 3);
+  assert.equal(fromV1.version, STORE_VERSION);
   assert.deepEqual(fromV1.focusSessions, []);
   assert.deepEqual(fromV1.meta.focusSettings, {
     defaultMinutes: 25,
@@ -49,7 +51,7 @@ test('v1 and v2 stores upgrade to v3 with focus defaults', () => {
     events: [],
     dailyArchives: [],
   }, { now: NOW, timeZone: 'Asia/Shanghai' });
-  assert.equal(fromV2.version, 3);
+  assert.equal(fromV2.version, STORE_VERSION);
   assert.deepEqual(fromV2.focusSessions, []);
   assert.equal(fromV2.meta.focusSettings.strictMode, true);
 });
@@ -271,4 +273,178 @@ test('quarter reports embed focus statistics only when sessions exist', () => {
   const markdown = Reporting.reportToMarkdown(report);
   assert.equal(markdown.includes('## 专注统计'), true);
   assert.equal(markdown.includes('专注总时长：25 分钟（1 次完成）'), true);
+});
+
+test('the pomodoro and the stopwatch cannot run at the same time', () => {
+  // Both measure wall-clock focus time, so overlapping them would count the
+  // same minutes twice across two statistics that would then disagree.
+  const running = storeWithSession();
+  assert.throws(
+    () => applyCommand(running, {
+      type: 'startFocus',
+      taskId: 'task-1',
+      payload: { entryId: 'time-1' },
+      occurredAt: '2026-07-17T02:12:00.000Z',
+    }),
+    /already running/,
+  );
+
+  let stopwatch = emptyStore();
+  stopwatch = applyCommand(stopwatch, {
+    type: 'create',
+    taskId: 'task-1',
+    payload: { title: '整理季度数据' },
+    occurredAt: '2026-07-17T02:01:00.000Z',
+  });
+  stopwatch = applyCommand(stopwatch, {
+    type: 'startFocus',
+    taskId: 'task-1',
+    payload: { entryId: 'time-1' },
+    occurredAt: '2026-07-17T02:05:00.000Z',
+  });
+  assert.throws(
+    () => applyCommand(stopwatch, {
+      type: 'startFocusSession',
+      payload: { sessionId: 'focus-9', plannedMinutes: 25 },
+      occurredAt: '2026-07-17T02:06:00.000Z',
+    }),
+    /already running/,
+  );
+});
+
+test('a completed pomodoro records a time entry, an abandoned one records none', () => {
+  let store = storeWithSession();
+  store = applyCommand(store, {
+    type: 'completeFocusSession',
+    eventId: 'complete-1',
+    payload: { sessionId: 'focus-1' },
+    occurredAt: '2026-07-17T02:35:00.000Z',
+  });
+  assert.equal(store.timeEntries.length, 1);
+  const entry = store.timeEntries[0];
+  assert.equal(entry.source, 'pomodoro');
+  assert.equal(entry.taskId, 'task-1');
+  assert.equal(entry.durationSeconds, 25 * 60);
+  assert.equal(entry.reportingDate, '2026-07-17');
+  assert.equal(entry.endedAt, '2026-07-17T02:35:00.000Z');
+
+  let abandoned = storeWithSession();
+  abandoned = applyCommand(abandoned, {
+    type: 'abandonFocusSession',
+    eventId: 'abandon-1',
+    payload: { sessionId: 'focus-1' },
+    occurredAt: '2026-07-17T02:20:00.000Z',
+  });
+  assert.equal(abandoned.focusSessions[0].status, 'abandoned');
+  assert.deepEqual(abandoned.timeEntries, []);
+});
+
+test('a free pomodoro with no task still records its minutes', () => {
+  let store = emptyStore();
+  store = applyCommand(store, {
+    type: 'startFocusSession',
+    eventId: 'start-free',
+    payload: { sessionId: 'focus-free', plannedMinutes: 45 },
+    occurredAt: '2026-07-17T02:10:00.000Z',
+  });
+  store = applyCommand(store, {
+    type: 'completeFocusSession',
+    eventId: 'complete-free',
+    payload: { sessionId: 'focus-free' },
+    occurredAt: '2026-07-17T02:55:00.000Z',
+  });
+  assert.equal(store.timeEntries.length, 1);
+  assert.equal(store.timeEntries[0].taskId, null);
+  assert.equal(store.timeEntries[0].durationSeconds, 45 * 60);
+});
+
+test('either v3 shape upgrades to v4 keeping the half it already had', () => {
+  // Two mutually unaware v3 builds shipped: one wrote daily-planning data, the
+  // other focus sessions. Both files must survive the upgrade intact.
+  const releasedV3 = sanitizeStore({
+    version: 3,
+    meta: {
+      historyStartAt: NOW.toISOString(),
+      timeZone: 'Asia/Shanghai',
+      nextSeq: 1,
+      dailyNotes: {},
+      dailyPlans: { '2026-07-17': { date: '2026-07-17', shutdownNote: '收尾说明' } },
+    },
+    tasks: [],
+    events: [],
+    dailyArchives: [],
+    scheduleBlocks: [],
+    timeEntries: [],
+  }, { now: NOW, timeZone: 'Asia/Shanghai' });
+  assert.equal(releasedV3.version, STORE_VERSION);
+  assert.equal(releasedV3.meta.dailyPlans['2026-07-17'].shutdownNote, '收尾说明');
+  assert.deepEqual(releasedV3.focusSessions, []);
+  assert.equal(releasedV3.meta.focusSettings.defaultMinutes, 25);
+
+  const focusV3 = sanitizeStore({
+    version: 3,
+    meta: {
+      historyStartAt: NOW.toISOString(),
+      timeZone: 'Asia/Shanghai',
+      nextSeq: 1,
+      dailyNotes: {},
+      focusSettings: { defaultMinutes: 45, strictMode: false },
+    },
+    tasks: [],
+    events: [],
+    dailyArchives: [],
+    focusSessions: [{
+      id: 'focus-old',
+      taskId: null,
+      plannedMinutes: 25,
+      startedAt: '2026-07-16T02:00:00.000Z',
+      endedAt: '2026-07-16T02:25:00.000Z',
+      status: 'completed',
+      focusedMinutes: 25,
+      reportingDate: '2026-07-16',
+    }],
+  }, { now: NOW, timeZone: 'Asia/Shanghai' });
+  assert.equal(focusV3.version, STORE_VERSION);
+  assert.equal(focusV3.focusSessions.length, 1);
+  assert.equal(focusV3.focusSessions[0].id, 'focus-old');
+  assert.equal(focusV3.meta.focusSettings.defaultMinutes, 45);
+  assert.equal(focusV3.meta.focusSettings.strictMode, false);
+  assert.deepEqual(focusV3.meta.dailyPlans, {});
+  assert.deepEqual(focusV3.timeEntries, []);
+});
+
+test('free focus minutes reach the day detail, deleted task minutes do not', () => {
+  let free = emptyStore();
+  free = applyCommand(free, {
+    type: 'startFocusSession',
+    eventId: 'start-free-2',
+    payload: { sessionId: 'focus-free-2', plannedMinutes: 45 },
+    occurredAt: '2026-07-17T02:10:00.000Z',
+  });
+  free = applyCommand(free, {
+    type: 'completeFocusSession',
+    eventId: 'complete-free-2',
+    payload: { sessionId: 'focus-free-2' },
+    occurredAt: '2026-07-17T02:55:00.000Z',
+  });
+  const freeDetail = Calendar.buildDateDetail(free, '2026-07-17');
+  assert.equal(freeDetail.summary.actualMinutes, 45);
+  assert.equal(freeDetail.actualTime[0].title, '自由专注');
+  assert.equal(freeDetail.actualTime[0].taskId, null);
+
+  // Withdrawing a task must still withdraw the time recorded against it.
+  let deleted = storeWithSession();
+  deleted = applyCommand(deleted, {
+    type: 'completeFocusSession',
+    eventId: 'complete-2',
+    payload: { sessionId: 'focus-1' },
+    occurredAt: '2026-07-17T02:35:00.000Z',
+  });
+  assert.equal(Calendar.buildDateDetail(deleted, '2026-07-17').summary.actualMinutes, 25);
+  deleted = applyCommand(deleted, {
+    type: 'delete',
+    taskId: 'task-1',
+    occurredAt: '2026-07-17T03:00:00.000Z',
+  });
+  assert.equal(Calendar.buildDateDetail(deleted, '2026-07-17').summary.actualMinutes, 0);
 });

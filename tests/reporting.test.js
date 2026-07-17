@@ -613,6 +613,44 @@ test('period reports count a multi-day task once while summing its daily planned
   assert.equal(report.byArea.find((area) => area.area === '研发').plannedMinutes, 240);
 });
 
+test('actual time flows from daily review into area and period estimate comparisons', () => {
+  const completed = task('timed', '实现执行日历', {
+    status: 'completed',
+    plannedDate: '2026-07-16',
+    dueDate: '2026-07-16',
+    estimateMinutes: 60,
+    area: '研发',
+    completedAt: '2026-07-16T10:00:00.000Z',
+  });
+  const source = store({
+    tasks: [completed],
+    timeEntries: [
+      { id: 'focus-a', taskId: 'timed', reportingDate: '2026-07-16', startedAt: '2026-07-16T08:00:00.000Z', endedAt: '2026-07-16T08:45:00.000Z', durationSeconds: 2700, source: 'focus' },
+      { id: 'manual-b', taskId: 'timed', reportingDate: '2026-07-16', startedAt: '2026-07-16T09:00:00.000Z', endedAt: '2026-07-16T09:00:00.000Z', durationSeconds: 1800, source: 'manual' },
+    ],
+  });
+
+  const daily = buildDailyRecord(source, '2026-07-16');
+  assert.equal(daily.summary.actualMinutes, 75);
+  assert.deepEqual(daily.actualTime.map((entry) => [entry.taskId, entry.minutes]), [['timed', 75]]);
+
+  const report = buildPeriodReport(source, { year: 2026, quarter: 3, today: '2026-07-16' });
+  assert.equal(report.totals.actualMinutes, 75);
+  assert.equal(report.timeAnalysis.estimatedCompletedMinutes, 60);
+  assert.equal(report.timeAnalysis.deviationMinutes, 15);
+  assert.equal(report.byArea.find((area) => area.area === '研发').actualMinutes, 75);
+  assert.match(reportToMarkdown(report), /实际记录用时：75 分钟/);
+
+  const deleted = { ...completed, deletedAt: '2026-07-16T12:00:00.000Z' };
+  assert.equal(buildDailyRecord({ ...source, tasks: [deleted] }, '2026-07-16').summary.actualMinutes, 0);
+
+  const inbox = { ...completed, status: 'active', plannedDate: null, dueDate: null, completedAt: null };
+  const actualOnly = buildPeriodReport({ ...source, tasks: [inbox] }, { year: 2026, quarter: 3, today: '2026-07-16' });
+  assert.equal(actualOnly.totals.activeDays, 1);
+  assert.equal(actualOnly.totals.planned, 0);
+  assert.equal(actualOnly.totals.actualMinutes, 75);
+});
+
 test('the reporting bundle exposes the same pure API in a browser context', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'reporting.js'), 'utf8');
   const context = vm.createContext({ window: {}, Intl, Date });

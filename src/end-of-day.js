@@ -62,8 +62,13 @@ function evaluateEndOfDayReminder(store, now = new Date(), options = {}) {
   const lastDate = DATE_PATTERN.test(String(store?.meta?.endOfDayReminderLastDate || ''))
     ? store.meta.endOfDayReminderLastDate
     : null;
+  const alreadyShutdown = Boolean(store?.meta?.dailyPlans?.[current.date]?.shutdownCompletedAt);
   const pending = pendingTasksForDate(store, current.date);
-  const due = enabled && current.time >= reminderTime && lastDate !== current.date && pending.length > 0;
+  const due = enabled
+    && current.time >= reminderTime
+    && lastDate !== current.date
+    && !alreadyShutdown
+    && pending.length > 0;
   return {
     due,
     enabled,
@@ -72,6 +77,7 @@ function evaluateEndOfDayReminder(store, now = new Date(), options = {}) {
     reminderTime,
     lastDate,
     pending,
+    alreadyShutdown,
   };
 }
 
