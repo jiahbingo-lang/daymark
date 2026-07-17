@@ -13,6 +13,7 @@ const {
 const Reporting = window.DaymarkReporting;
 const Calendar = window.DaymarkCalendar;
 const Planning = window.DaymarkPlanning;
+const DailyPlanning = window.DaymarkDailyPlanning;
 const AiReport = window.DaymarkAiReport;
 const DAYMARK_TIME_ZONE = 'Asia/Shanghai';
 
@@ -60,6 +61,7 @@ const browserPreviewBridge = {
   },
   onFocusNewTask: () => () => {},
   onFocusSearch: () => () => {},
+  onOpenDailyShutdown: () => () => {},
   async getAiSettings() {
     return { ...previewAiSettings };
   },
@@ -96,6 +98,7 @@ const unavailableBridge = {
   async saveMarkdown() { throw new Error('安全桥接未加载，禁止导出'); },
   onFocusNewTask: () => () => {},
   onFocusSearch: () => () => {},
+  onOpenDailyShutdown: () => () => {},
 };
 const bridgeUnavailable = !window.daymark && !previewEnabled;
 const bridge = window.daymark || (previewEnabled ? browserPreviewBridge : unavailableBridge);
@@ -203,6 +206,11 @@ const elements = {
   capacitySelect: $('#capacity-select'),
   endOfDayEnabled: $('#end-of-day-enabled'),
   endOfDayTime: $('#end-of-day-time'),
+  dailyRitualBar: $('#daily-ritual-bar'),
+  dailyRitualStatus: $('#daily-ritual-status'),
+  dailyRitualDetail: $('#daily-ritual-detail'),
+  planToday: $('#plan-today'),
+  shutdownToday: $('#shutdown-today'),
   dailyNote: $('#daily-note'),
   dailyNoteInput: $('#daily-note-input'),
   reviewWorkspace: $('#review-workspace'),
@@ -275,6 +283,21 @@ const elements = {
   toast: $('#toast'),
   toastMessage: $('#toast-message'),
   undoButton: $('#undo-button'),
+  dailyPlanDialog: $('#daily-plan-dialog'),
+  dailyPlanForm: $('#daily-plan-form'),
+  dailyPlanCandidates: $('#daily-plan-candidates'),
+  dailyPlanSummary: $('#daily-plan-summary'),
+  dailyPlanEmpty: $('#daily-plan-empty'),
+  confirmDailyPlan: $('#confirm-daily-plan'),
+  dailyShutdownDialog: $('#daily-shutdown-dialog'),
+  dailyShutdownForm: $('#daily-shutdown-form'),
+  dailyShutdownTasks: $('#daily-shutdown-tasks'),
+  dailyShutdownSummary: $('#daily-shutdown-summary'),
+  dailyShutdownEmpty: $('#daily-shutdown-empty'),
+  shutdownNote: $('#shutdown-note'),
+  shutdownBlockerNote: $('#shutdown-blocker-note'),
+  shutdownTomorrowFocus: $('#shutdown-tomorrow-focus'),
+  confirmDailyShutdown: $('#confirm-daily-shutdown'),
   debugState: $('#app-debug-state'),
 };
 
@@ -351,7 +374,7 @@ function showToast(message, canUndo = false) {
   elements.toast.hidden = false;
   toastTimer = setTimeout(() => {
     elements.toast.hidden = true;
-  }, 10000);
+  }, 8000);
 }
 
 function errorMessage(error) {
@@ -503,7 +526,7 @@ function renderHeader() {
   elements.toolbarHint.textContent = copy.hint;
 }
 
-function buildTaskRow(task) {
+function buildTaskRow(task, options = {}) {
   const showTop3 = Boolean(task.top3Date && task.top3Date === task.plannedDate);
   const top3Label = task.top3Date === todayDate()
     ? '★ 今日 Top 3'
@@ -542,6 +565,10 @@ function buildTaskRow(task) {
 
   const meta = document.createElement('div');
   meta.className = 'task-meta';
+  if (options.todayReason) {
+    const reason = appendMeta(meta, options.todayReason, 'today-reason-pill');
+    reason.classList.toggle('is-overdue', options.todayReason.includes('逾期') || options.todayReason.includes('延续'));
+  }
   if (showTop3) appendMeta(meta, top3Label, 'top3-pill');
   if (task.flagged) appendMeta(meta, '⚑ 旗标', 'flagged-pill');
   if (task.plannedDate) appendMeta(meta, `计划 ${formatShortDate(task.plannedDate)}`, 'planned-pill');
@@ -606,12 +633,38 @@ function renderEmpty(tasks) {
 function renderTaskList() {
   const tasks = visibleTasks(activeTasks(), state.view, state.query, todayDate());
   const fragment = document.createDocumentFragment();
-  tasks.forEach((task) => fragment.appendChild(buildTaskRow(task)));
+  const today = todayDate();
+  const schedule = state.view === 'today' ? Planning.buildSchedule(state.store) : null;
+  const blocksToday = Object.fromEntries((schedule?.byDate?.[today] || []).map((block) => [block.taskId, block]));
+  if (state.view === 'today' && !state.query) {
+    const groups = DailyPlanning.groupTodayTasks(tasks, today, blocksToday);
+    [
+      ['top3', '今日 Top3'],
+      ['planned', '今天的安排'],
+      ['overdue', '逾期与延续'],
+      ['other', '其他可做事项'],
+    ].forEach(([key, label]) => {
+      if (!groups[key].length) return;
+      const section = document.createElement('section');
+      section.className = `today-task-group today-task-group-${key}`;
+      const heading = document.createElement('h2');
+      heading.className = 'today-task-group-heading';
+      heading.append(label, makeElement('span', '', String(groups[key].length)));
+      section.appendChild(heading);
+      groups[key].forEach((task) => section.appendChild(buildTaskRow(task, {
+        todayReason: DailyPlanning.todayReason(task, today, blocksToday[task.id]),
+      })));
+      fragment.appendChild(section);
+    });
+  } else {
+    tasks.forEach((task) => fragment.appendChild(buildTaskRow(task)));
+  }
   elements.taskList.replaceChildren(fragment);
   renderEmpty(tasks);
 
   const isToday = state.view === 'today';
   elements.todayCapacity.hidden = !isToday;
+  elements.dailyRitualBar.hidden = !isToday;
   elements.dailyNote.hidden = !isToday;
   if (isToday) {
     const today = todayDate();
@@ -635,7 +688,311 @@ function renderTaskList() {
     elements.endOfDayTime.value = state.store?.meta?.endOfDayReminderTime || '17:30';
     elements.endOfDayTime.disabled = !elements.endOfDayEnabled.checked;
     elements.dailyNoteInput.value = state.store?.meta?.dailyNotes?.[todayDate()] || '';
+    const dailyPlan = DailyPlanning.dailyPlanForDate(state.store, today);
+    const pending = DailyPlanning.pendingShutdownTasks(state.store, today);
+    if (dailyPlan?.shutdownCompletedAt) {
+      elements.dailyRitualStatus.textContent = '今天已经完成收尾';
+      elements.dailyRitualDetail.textContent = `${pending.length} 项仍保留原计划，今天不会再次提醒。`;
+      elements.planToday.textContent = '调整计划';
+      elements.shutdownToday.textContent = '查看收尾';
+    } else if (dailyPlan?.planningCompletedAt) {
+      elements.dailyRitualStatus.textContent = '今日计划已确认';
+      elements.dailyRitualDetail.textContent = `${surfaced.length} 项待处理 · ${pending.length} 项需要下班前确认去向。`;
+      elements.planToday.textContent = '调整计划';
+      elements.shutdownToday.textContent = '下班收尾';
+    } else {
+      elements.dailyRitualStatus.textContent = '今天尚未规划';
+      elements.dailyRitualDetail.textContent = `${DailyPlanning.dailyPlanningCandidates(state.store, today).length} 项候选，先选出真正做得完的工作。`;
+      elements.planToday.textContent = '规划今天';
+      elements.shutdownToday.textContent = '下班收尾';
+    }
   }
+}
+
+function planningRowMeta(item, today) {
+  const task = item.task;
+  const details = [item.categoryLabel];
+  if (task.plannedDate) details.push(`计划 ${formatShortDate(task.plannedDate)}`);
+  if (task.dueDate) details.push(`截止 ${formatShortDate(task.dueDate)}`);
+  if (task.estimateMinutes) details.push(`${task.estimateMinutes} 分钟`);
+  if (task.area) details.push(task.area);
+  if (task.dueDate && task.dueDate < today) details.push('到期日已过，不能直接设为 Top3');
+  return details.join(' · ');
+}
+
+function updateDailyPlanSummary() {
+  const rows = [...elements.dailyPlanCandidates.querySelectorAll('.ritual-candidate')];
+  const selectedRows = rows.filter((row) => row.querySelector('.plan-include')?.checked);
+  const top3Count = rows.filter((row) => row.querySelector('.plan-top3')?.checked).length;
+  const minutes = selectedRows.reduce((total, row) => {
+    const task = activeTasks().find((item) => item.id === row.dataset.taskId);
+    return total + (Number(task?.estimateMinutes) || 0);
+  }, 0);
+  const capacity = Number(state.store?.meta?.dailyCapacityMinutes) || 0;
+  const overloaded = capacity > 0 && minutes > capacity;
+  elements.dailyPlanSummary.textContent = `${selectedRows.length} 项进入今日承诺 · ${minutes} / ${capacity} 分钟 · Top3 ${top3Count}/3${overloaded ? ' · 已超出容量' : ''}`;
+  elements.dailyPlanSummary.classList.toggle('is-overloaded', overloaded);
+}
+
+function renderDailyPlanDialog() {
+  const today = todayDate();
+  const candidates = DailyPlanning.dailyPlanningCandidates(state.store, today);
+  const fragment = document.createDocumentFragment();
+  candidates.forEach((item) => {
+    const task = item.task;
+    const row = makeElement('div', 'ritual-candidate');
+    row.dataset.taskId = task.id;
+
+    const include = document.createElement('input');
+    include.type = 'checkbox';
+    include.className = 'plan-include';
+    include.checked = item.selected;
+    include.setAttribute('aria-label', `将“${task.title}”加入今日承诺`);
+
+    const copy = makeElement('div', 'ritual-task-copy');
+    copy.append(makeElement('strong', '', task.title), makeElement('small', '', planningRowMeta(item, today)));
+    const defer = makeElement('div', 'ritual-defer');
+    defer.hidden = item.selected;
+    const deferSelect = document.createElement('select');
+    deferSelect.className = 'plan-defer-select';
+    deferSelect.setAttribute('aria-label', `设置“${task.title}”不进入今天时的去向`);
+    [
+      ['tomorrow', '移到明天'],
+      ['date', '移到指定日期'],
+      ['inbox', '撤销安排并移回收件箱'],
+      ['keep', '保留原安排'],
+    ].forEach(([value, label]) => deferSelect.appendChild(new Option(label, value)));
+    const deferDate = document.createElement('input');
+    deferDate.type = 'date';
+    deferDate.className = 'plan-defer-date';
+    deferDate.min = tomorrowDate();
+    deferDate.value = tomorrowDate();
+    deferDate.hidden = true;
+    defer.append(deferSelect, deferDate);
+    copy.appendChild(defer);
+
+    const top3Label = makeElement('label', 'ritual-top3');
+    const top3 = document.createElement('input');
+    top3.type = 'checkbox';
+    top3.className = 'plan-top3';
+    top3.checked = task.top3Date === today;
+    top3.disabled = Boolean(task.dueDate && task.dueDate < today);
+    if (top3.checked) include.checked = true;
+    top3Label.append(top3, document.createTextNode('★ Top3'));
+    row.append(include, copy, top3Label);
+    row.dataset.wasSelected = String(item.selected);
+    fragment.appendChild(row);
+  });
+  elements.dailyPlanCandidates.replaceChildren(fragment);
+  elements.dailyPlanEmpty.hidden = candidates.length > 0;
+  updateDailyPlanSummary();
+}
+
+async function openDailyPlan() {
+  const today = todayDate();
+  const plan = DailyPlanning.dailyPlanForDate(state.store, today);
+  if (!plan?.planningStartedAt) {
+    await dispatch({
+      type: 'startDailyPlan',
+      eventId: `daily-plan-start-${today}`,
+      payload: { date: today },
+    });
+  }
+  renderDailyPlanDialog();
+  if (!elements.dailyPlanDialog.open) elements.dailyPlanDialog.showModal();
+}
+
+function shutdownTaskMeta(task, today) {
+  const details = [];
+  if (task.top3Date === today) details.push('★ 今日 Top3');
+  if (task.plannedDate) details.push(`计划 ${formatShortDate(task.plannedDate)}`);
+  if (task.dueDate) details.push(`截止 ${formatShortDate(task.dueDate)}`);
+  if (task.estimateMinutes) details.push(`${task.estimateMinutes} 分钟`);
+  return details.join(' · ') || '今天需要确认去向';
+}
+
+function updateDailyShutdownSummary() {
+  const plan = DailyPlanning.dailyPlanForDate(state.store, todayDate());
+  const rows = [...elements.dailyShutdownTasks.querySelectorAll('.shutdown-task')];
+  if (plan?.shutdownCompletedAt) {
+    elements.dailyShutdownSummary.textContent = `今日收尾已完成；当前仍有 ${rows.length} 项保留在原计划中。以下内容仅供查看。`;
+    return;
+  }
+  const handled = rows.filter((row) => ['complete', 'tomorrow', 'date', 'inbox']
+    .includes(row.querySelector('.shutdown-action-select')?.value)).length;
+  const blocked = rows.filter((row) => row.querySelector('.shutdown-action-select')?.value === 'blocked').length;
+  const remaining = rows.length - handled;
+  elements.dailyShutdownSummary.textContent = rows.length
+    ? `${rows.length} 项未完成 · 确认后处理 ${handled} 项 · 保留 ${remaining} 项${blocked ? `（其中阻塞 ${blocked} 项）` : ''}。截止日早于新日期时会同步顺延。`
+    : '今天没有仍需处理的事项，可以补充成果后完成收尾。';
+}
+
+function renderDailyShutdownDialog() {
+  const today = todayDate();
+  const tasks = DailyPlanning.pendingShutdownTasks(state.store, today);
+  const plan = DailyPlanning.dailyPlanForDate(state.store, today);
+  const readOnly = Boolean(plan?.shutdownCompletedAt);
+  const fragment = document.createDocumentFragment();
+  tasks.forEach((task) => {
+    const row = makeElement('div', 'shutdown-task');
+    row.dataset.taskId = task.id;
+    const copy = makeElement('div', 'shutdown-task-copy');
+    copy.append(makeElement('strong', '', task.title), makeElement('small', '', shutdownTaskMeta(task, today)));
+    const action = makeElement('div', 'shutdown-action');
+    const select = document.createElement('select');
+    select.className = 'shutdown-action-select';
+    select.setAttribute('aria-label', `设置“${task.title}”的去向`);
+    [
+      ['keep', '保持原计划'],
+      ['complete', '标记完成'],
+      ['tomorrow', '移到明天'],
+      ['date', '移到指定日期'],
+      ['inbox', '撤销安排并移回收件箱'],
+      ['blocked', '记录为阻塞'],
+    ].forEach(([value, label]) => select.appendChild(new Option(label, value)));
+    select.disabled = readOnly;
+    const customDate = document.createElement('input');
+    customDate.type = 'date';
+    customDate.className = 'shutdown-date-input';
+    customDate.min = tomorrowDate();
+    customDate.value = tomorrowDate();
+    customDate.hidden = true;
+    action.append(select, customDate);
+    row.append(copy, action);
+    fragment.appendChild(row);
+  });
+  elements.dailyShutdownTasks.replaceChildren(fragment);
+  elements.dailyShutdownEmpty.hidden = tasks.length > 0;
+  updateDailyShutdownSummary();
+  elements.shutdownNote.value = plan?.shutdownNote || '';
+  elements.shutdownBlockerNote.value = plan?.blockerNote || '';
+  elements.shutdownTomorrowFocus.value = plan?.tomorrowFocus || '';
+  [elements.shutdownNote, elements.shutdownBlockerNote, elements.shutdownTomorrowFocus]
+    .forEach((field) => { field.readOnly = readOnly; });
+  elements.confirmDailyShutdown.dataset.readonly = String(readOnly);
+  elements.confirmDailyShutdown.textContent = readOnly ? '关闭' : '完成今日收尾';
+}
+
+function openDailyShutdown() {
+  renderDailyShutdownDialog();
+  if (!elements.dailyShutdownDialog.open) elements.dailyShutdownDialog.showModal();
+}
+
+async function confirmDailyPlan() {
+  const today = todayDate();
+  const rows = [...elements.dailyPlanCandidates.querySelectorAll('.ritual-candidate')];
+  const top3Rows = rows.filter((row) => row.querySelector('.plan-top3')?.checked);
+  if (top3Rows.length > 3) {
+    showToast('一天最多只能选择 3 个 Top3', false);
+    return false;
+  }
+  const invalidDateRow = rows.find((row) => {
+    const include = row.querySelector('.plan-include')?.checked;
+    const disposition = row.querySelector('.plan-defer-select')?.value;
+    if (include || disposition !== 'date') return false;
+    const target = row.querySelector('.plan-defer-date')?.value;
+    return !target || target <= today;
+  });
+  if (invalidDateRow) {
+    showToast('指定日期必须晚于今天', false);
+    invalidDateRow.querySelector('.plan-defer-date')?.focus();
+    return false;
+  }
+  const currentTop3 = activeTasks().filter((task) => task.top3Date === today);
+  const desiredTop3 = new Set(top3Rows.map((row) => row.dataset.taskId));
+  for (const task of currentTop3) {
+    if (!desiredTop3.has(task.id)) await patchTask(task.id, { top3Date: null });
+  }
+  for (const row of rows) {
+    const include = row.querySelector('.plan-include')?.checked;
+    const wantsTop3 = row.querySelector('.plan-top3')?.checked;
+    const task = activeTasks().find((item) => item.id === row.dataset.taskId && !item.deletedAt);
+    if (!task) continue;
+    if (!include && !wantsTop3) {
+      if (row.dataset.wasSelected !== 'true') continue;
+      const disposition = row.querySelector('.plan-defer-select')?.value || 'keep';
+      if (disposition === 'tomorrow' || disposition === 'date') {
+        const target = disposition === 'tomorrow' ? tomorrowDate() : row.querySelector('.plan-defer-date')?.value;
+        if (!target || target <= today) {
+          showToast('指定日期必须晚于今天', false);
+          return false;
+        }
+        await patchTask(task.id, {
+          plannedDate: target,
+          ...(task.dueDate && task.dueDate < target ? { dueDate: target } : {}),
+        });
+      } else if (disposition === 'inbox') {
+        await patchTask(task.id, { plannedDate: null, dueDate: null, top3Date: null });
+      } else if (task.top3Date === today) await patchTask(task.id, { top3Date: null });
+      continue;
+    }
+    const canMoveToToday = !task.dueDate || task.dueDate >= today;
+    const patch = {};
+    if (canMoveToToday && task.plannedDate !== today) patch.plannedDate = today;
+    if (wantsTop3 && canMoveToToday) patch.top3Date = today;
+    if (Object.keys(patch).length) await patchTask(task.id, patch);
+  }
+  await dispatch({
+    type: 'completeDailyPlan',
+    eventId: `daily-plan-complete-${today}`,
+    payload: { date: today },
+  });
+  elements.dailyPlanDialog.close();
+  showToast('今日计划已确认', state.history.length > 0);
+  return true;
+}
+
+async function confirmDailyShutdown() {
+  const today = todayDate();
+  if (DailyPlanning.shutdownComplete(state.store, today)) {
+    elements.dailyShutdownDialog.close();
+    return true;
+  }
+  const blockedTaskIds = [];
+  const rows = [...elements.dailyShutdownTasks.querySelectorAll('.shutdown-task')];
+  const invalidDateRow = rows.find((row) => {
+    if (row.querySelector('.shutdown-action-select')?.value !== 'date') return false;
+    const target = row.querySelector('.shutdown-date-input')?.value;
+    return !target || target <= today;
+  });
+  if (invalidDateRow) {
+    showToast('指定日期必须晚于今天', false);
+    invalidDateRow.querySelector('.shutdown-date-input')?.focus();
+    return false;
+  }
+  for (const row of rows) {
+    const action = row.querySelector('.shutdown-action-select')?.value || 'keep';
+    const task = activeTasks().find((item) => item.id === row.dataset.taskId && !item.deletedAt);
+    if (!task || task.status === 'completed') continue;
+    if (action === 'complete') await toggleTaskById(task.id);
+    else if (action === 'tomorrow' || action === 'date') {
+      const target = action === 'tomorrow' ? tomorrowDate() : row.querySelector('.shutdown-date-input')?.value;
+      if (!target || target <= today) {
+        showToast('指定日期必须晚于今天', false);
+        return false;
+      }
+      await patchTask(task.id, {
+        plannedDate: target,
+        ...(task.dueDate && task.dueDate < target ? { dueDate: target } : {}),
+      });
+    } else if (action === 'inbox') {
+      await patchTask(task.id, { plannedDate: null, dueDate: null, top3Date: null });
+    } else if (action === 'blocked') blockedTaskIds.push(task.id);
+  }
+  await dispatch({
+    type: 'completeDailyShutdown',
+    eventId: `daily-shutdown-complete-${today}`,
+    payload: {
+      date: today,
+      shutdownNote: elements.shutdownNote.value,
+      blockerNote: elements.shutdownBlockerNote.value,
+      tomorrowFocus: elements.shutdownTomorrowFocus.value,
+      blockedTaskIds,
+    },
+  });
+  elements.dailyShutdownDialog.close();
+  showToast('今日收尾已完成，今天不再提醒', state.history.length > 0);
+  return true;
 }
 
 function renderAreaSuggestions() {
@@ -1049,11 +1406,21 @@ async function patchTask(taskId, patch, options = {}) {
   const task = activeTasks().find((item) => item.id === taskId && !item.deletedAt);
   if (!task) return;
   const inverse = inverseTaskPatch(task, patch);
+  let message = options.message;
+  if (message === undefined && Object.prototype.hasOwnProperty.call(patch, 'plannedDate')) {
+    message = patch.plannedDate
+      ? `已将“${task.title}”安排到${formatShortDate(patch.plannedDate)}`
+      : Object.prototype.hasOwnProperty.call(patch, 'dueDate') && !patch.dueDate
+        ? `已将“${task.title}”移回收件箱`
+        : `已清除“${task.title}”的计划日期`;
+  } else if (message === undefined && Object.prototype.hasOwnProperty.call(patch, 'dueDate')) {
+    message = `已更新“${task.title}”的最后期限`;
+  }
   try {
     await dispatch({ type: 'update', taskId, payload: patch }, {
       undo: options.undo === false ? null : { type: 'update', taskId, payload: inverse },
       undoMessage: '已撤销任务修改',
-      message: options.message,
+      message,
     });
     return true;
   } catch {
@@ -1352,6 +1719,63 @@ elements.endOfDayEnabled.addEventListener('change', () => {
   saveEndOfDayReminder();
 });
 elements.endOfDayTime.addEventListener('change', saveEndOfDayReminder);
+
+elements.planToday.addEventListener('click', () => runAction(openDailyPlan()));
+elements.shutdownToday.addEventListener('click', openDailyShutdown);
+
+elements.dailyPlanCandidates.addEventListener('change', (event) => {
+  const row = event.target.closest('.ritual-candidate');
+  if (!row) return;
+  const include = row.querySelector('.plan-include');
+  const top3 = row.querySelector('.plan-top3');
+  if (event.target === top3 && top3.checked) {
+    const checked = elements.dailyPlanCandidates.querySelectorAll('.plan-top3:checked');
+    if (checked.length > 3) {
+      top3.checked = false;
+      showToast('一天最多只能选择 3 个 Top3', false);
+    } else include.checked = true;
+  }
+  if (event.target === include && !include.checked && top3.checked) top3.checked = false;
+  if (event.target === include) {
+    const defer = row.querySelector('.ritual-defer');
+    if (defer) defer.hidden = include.checked || row.dataset.wasSelected !== 'true';
+  }
+  if (event.target.matches('.plan-defer-select')) {
+    const customDate = row.querySelector('.plan-defer-date');
+    customDate.hidden = event.target.value !== 'date';
+    if (!customDate.hidden) customDate.focus();
+  }
+  updateDailyPlanSummary();
+});
+
+elements.dailyPlanForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (elements.confirmDailyPlan.disabled) return;
+  elements.confirmDailyPlan.disabled = true;
+  runAction(confirmDailyPlan().finally(() => { elements.confirmDailyPlan.disabled = false; }));
+});
+
+elements.dailyShutdownTasks.addEventListener('change', (event) => {
+  const row = event.target.closest('.shutdown-task');
+  if (!row || !event.target.matches('.shutdown-action-select')) return;
+  const customDate = row.querySelector('.shutdown-date-input');
+  customDate.hidden = event.target.value !== 'date';
+  if (!customDate.hidden) customDate.focus();
+  updateDailyShutdownSummary();
+});
+
+elements.dailyShutdownForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (elements.confirmDailyShutdown.disabled) return;
+  elements.confirmDailyShutdown.disabled = true;
+  runAction(confirmDailyShutdown().finally(() => { elements.confirmDailyShutdown.disabled = false; }));
+});
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-close-dialog]');
+  if (!button) return;
+  document.getElementById(button.dataset.closeDialog)?.close();
+});
 
 async function flushDailyNote() {
   clearTimeout(noteTimer);
@@ -1746,6 +2170,15 @@ bridge.onFocusSearch(() => {
   render();
   elements.searchInput.focus();
   elements.searchInput.select();
+});
+
+bridge.onOpenDailyShutdown(() => {
+  state.view = 'today';
+  state.selectedId = null;
+  state.query = '';
+  elements.searchInput.value = '';
+  render();
+  requestAnimationFrame(openDailyShutdown);
 });
 
 async function persistMissingArchives() {

@@ -209,6 +209,53 @@
     return result;
   }
 
+  function sanitizeTaskIdList(value) {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(value
+      .map((item) => normalizeOptionalText(item, 120))
+      .filter(Boolean))]
+      .slice(0, 200);
+  }
+
+  function emptyDailyPlan(date) {
+    return {
+      date,
+      planningStartedAt: null,
+      planningCompletedAt: null,
+      shutdownCompletedAt: null,
+      shutdownNote: '',
+      blockerNote: '',
+      tomorrowFocus: '',
+      blockedTaskIds: [],
+    };
+  }
+
+  function sanitizeDailyPlan(input, date) {
+    const safeDate = normalizeDate(date || input?.date);
+    if (!safeDate) return null;
+    const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+    return {
+      date: safeDate,
+      planningStartedAt: normalizeIso(source.planningStartedAt, null),
+      planningCompletedAt: normalizeIso(source.planningCompletedAt, null),
+      shutdownCompletedAt: normalizeIso(source.shutdownCompletedAt, null),
+      shutdownNote: normalizeText(source.shutdownNote, 10000),
+      blockerNote: normalizeText(source.blockerNote, 5000),
+      tomorrowFocus: normalizeText(source.tomorrowFocus, 2000),
+      blockedTaskIds: sanitizeTaskIdList(source.blockedTaskIds),
+    };
+  }
+
+  function sanitizeDailyPlans(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const result = {};
+    Object.entries(value).forEach(([date, plan]) => {
+      const safePlan = sanitizeDailyPlan(plan, date);
+      if (safePlan) result[safePlan.date] = safePlan;
+    });
+    return result;
+  }
+
   function sanitizeEvent(input) {
     if (!input || typeof input !== 'object') return null;
     const eventId = normalizeOptionalText(input.eventId, 180);
@@ -268,6 +315,7 @@
         endOfDayReminderTime: DEFAULT_END_OF_DAY_REMINDER_TIME,
         endOfDayReminderLastDate: null,
         dailyNotes: {},
+        dailyPlans: {},
       },
       tasks,
       events,
@@ -310,6 +358,7 @@
         endOfDayReminderTime: normalizeClockTime(metaInput.endOfDayReminderTime),
         endOfDayReminderLastDate: normalizeDate(metaInput.endOfDayReminderLastDate),
         dailyNotes: sanitizeDailyNotes(metaInput.dailyNotes),
+        dailyPlans: sanitizeDailyPlans(metaInput.dailyPlans),
       },
       tasks,
       events,
@@ -545,6 +594,9 @@
       'setCapacity',
       'setEndOfDayReminder',
       'markEndOfDayReminderFired',
+      'startDailyPlan',
+      'completeDailyPlan',
+      'completeDailyShutdown',
     ];
     if (!supported.includes(command.type)) throw new Error(`Unsupported command: ${command.type}`);
 
@@ -557,7 +609,11 @@
     const occurredAt = occurredDate.toISOString();
     let next = {
       ...store,
-      meta: { ...store.meta, dailyNotes: { ...store.meta.dailyNotes } },
+      meta: {
+        ...store.meta,
+        dailyNotes: { ...store.meta.dailyNotes },
+        dailyPlans: { ...store.meta.dailyPlans },
+      },
       tasks: [...store.tasks],
       events: [...store.events],
       dailyArchives: [...store.dailyArchives],
@@ -674,6 +730,40 @@
       before = { date: next.meta.endOfDayReminderLastDate };
       next.meta.endOfDayReminderLastDate = date;
       after = { date };
+      taskId = null;
+    } else if (['startDailyPlan', 'completeDailyPlan', 'completeDailyShutdown'].includes(command.type)) {
+      const date =
+        normalizeDate(commandValue(command, 'date') || commandValue(command, 'reportingDate')) ||
+        dateInTimeZone(occurredDate, next.meta.timeZone);
+      const previous = sanitizeDailyPlan(next.meta.dailyPlans[date], date) || emptyDailyPlan(date);
+      if (
+        (command.type === 'startDailyPlan' && previous.planningStartedAt) ||
+        (command.type === 'completeDailyPlan' && previous.planningCompletedAt) ||
+        (command.type === 'completeDailyShutdown' && previous.shutdownCompletedAt)
+      ) return store;
+      const plan = { ...previous, blockedTaskIds: [...previous.blockedTaskIds] };
+      before = jsonClone(previous);
+      if (command.type === 'startDailyPlan') {
+        plan.planningStartedAt = plan.planningStartedAt || occurredAt;
+      } else if (command.type === 'completeDailyPlan') {
+        plan.planningStartedAt = plan.planningStartedAt || occurredAt;
+        plan.planningCompletedAt = occurredAt;
+      } else {
+        const shutdownNote = commandValue(command, 'shutdownNote');
+        const blockerNote = commandValue(command, 'blockerNote');
+        const tomorrowFocus = commandValue(command, 'tomorrowFocus');
+        const blockedTaskIds = commandValue(command, 'blockedTaskIds');
+        plan.shutdownCompletedAt = occurredAt;
+        if (shutdownNote !== undefined) plan.shutdownNote = normalizeText(shutdownNote, 10000);
+        if (blockerNote !== undefined) plan.blockerNote = normalizeText(blockerNote, 5000);
+        if (tomorrowFocus !== undefined) plan.tomorrowFocus = normalizeText(tomorrowFocus, 2000);
+        if (blockedTaskIds !== undefined) {
+          const activeIds = new Set(next.tasks.filter((task) => !task.deletedAt).map((task) => task.id));
+          plan.blockedTaskIds = sanitizeTaskIdList(blockedTaskIds).filter((id) => activeIds.has(id));
+        }
+      }
+      after = sanitizeDailyPlan(plan, date);
+      next.meta.dailyPlans[date] = after;
       taskId = null;
     }
 

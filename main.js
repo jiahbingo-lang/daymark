@@ -33,6 +33,7 @@ const APP_ASSETS = new Map([
   ['/src/styles.css', 'text/css; charset=utf-8'],
   ['/src/domain.js', 'text/javascript; charset=utf-8'],
   ['/src/planning.js', 'text/javascript; charset=utf-8'],
+  ['/src/daily-planning.js', 'text/javascript; charset=utf-8'],
   ['/src/reporting.js', 'text/javascript; charset=utf-8'],
   ['/src/calendar.js', 'text/javascript; charset=utf-8'],
   ['/src/ai-report.js', 'text/javascript; charset=utf-8'],
@@ -298,6 +299,14 @@ function showAndFocusNewTask() {
   mainWindow.webContents.send('app:focus-new-task');
 }
 
+function showAndFocusDailyShutdown() {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send('app:open-daily-shutdown');
+}
+
 async function smokeAudit() {
   const result = await mainWindow.webContents.executeJavaScript(`
     (async () => {
@@ -561,6 +570,67 @@ async function smokeAudit() {
       document.querySelector('.task-row [data-action="delete"]').click();
       await waitFor(() => debug().visibleTaskCount === 0 && debug().totalEvents >= 16, 'completed deletion');
 
+      document.querySelector('[data-view="today"]').click();
+      const ritualInput = document.querySelector('#task-input');
+      ritualInput.value = 'Smoke 每日规划收尾验证';
+      document.querySelector('#add-form').requestSubmit();
+      await waitFor(
+        () => debug().view === 'today'
+          && [...document.querySelectorAll('.task-row')].some((row) => row.textContent.includes('Smoke 每日规划收尾验证')),
+        'daily ritual task creation',
+      );
+      document.querySelector('#plan-today').click();
+      await waitFor(() => document.querySelector('#daily-plan-dialog')?.open, 'morning planner dialog');
+      const ritualCandidate = [...document.querySelectorAll('.ritual-candidate')]
+        .find((row) => row.textContent.includes('Smoke 每日规划收尾验证'));
+      const ritualTop3 = ritualCandidate?.querySelector('.plan-top3');
+      if (!ritualCandidate || !ritualTop3) throw new Error('Daily planner did not surface the ritual task');
+      if (!ritualTop3.checked) ritualTop3.click();
+      document.querySelector('#daily-plan-form').requestSubmit();
+      await waitFor(() => !document.querySelector('#daily-plan-dialog')?.open, 'morning plan confirmation');
+      await waitFor(
+        () => [...document.querySelectorAll('.task-row')]
+          .some((row) => row.textContent.includes('Smoke 每日规划收尾验证') && row.querySelector('.top3-pill') && row.querySelector('.today-reason-pill')),
+        'morning plan markers',
+      );
+      document.querySelector('#shutdown-today').click();
+      await waitFor(() => document.querySelector('#daily-shutdown-dialog')?.open, 'shutdown dialog');
+      const shutdownRow = [...document.querySelectorAll('.shutdown-task')]
+        .find((row) => row.textContent.includes('Smoke 每日规划收尾验证'));
+      const shutdownAction = shutdownRow?.querySelector('.shutdown-action-select');
+      if (!shutdownRow || !shutdownAction) throw new Error('Shutdown did not surface the ritual task');
+      shutdownAction.value = 'tomorrow';
+      shutdownAction.dispatchEvent(new Event('change', { bubbles: true }));
+      document.querySelector('#shutdown-note').value = 'Smoke 今日成果';
+      document.querySelector('#shutdown-tomorrow-focus').value = 'Smoke 明日重点';
+      document.querySelector('#daily-shutdown-form').requestSubmit();
+      await waitFor(() => !document.querySelector('#daily-shutdown-dialog')?.open, 'shutdown confirmation');
+      const ritualStore = await window.daymark.load();
+      const ritualDate = window.TodoDomain.dateInTimeZone(new Date(), 'Asia/Shanghai');
+      const ritualTask = ritualStore.tasks.find((task) => task.title === 'Smoke 每日规划收尾验证');
+      const ritualPlan = ritualStore.meta.dailyPlans?.[ritualDate];
+      const dailyRitualSynced = Boolean(
+        ritualTask?.plannedDate === window.DaymarkDailyPlanning.addDays(ritualDate, 1)
+        && ritualTask?.top3Date === null
+        && ritualPlan?.planningStartedAt
+        && ritualPlan?.planningCompletedAt
+        && ritualPlan?.shutdownCompletedAt
+        && ritualPlan?.shutdownNote === 'Smoke 今日成果'
+        && ritualPlan?.tomorrowFocus === 'Smoke 明日重点',
+      );
+      document.querySelector('[data-view="upcoming"]').click();
+      await waitFor(
+        () => [...document.querySelectorAll('.task-row')].some((row) => row.textContent.includes('Smoke 每日规划收尾验证')),
+        'ritual task moved to tomorrow',
+      );
+      [...document.querySelectorAll('.task-row')]
+        .find((row) => row.textContent.includes('Smoke 每日规划收尾验证'))
+        ?.querySelector('[data-action="delete"]')?.click();
+      await waitFor(
+        () => ![...document.querySelectorAll('.task-row')].some((row) => row.textContent.includes('Smoke 每日规划收尾验证')),
+        'ritual task cleanup',
+      );
+
       document.querySelector('[data-view="review"]').click();
       await waitFor(() => document.querySelector('[data-review-mode="quarter"]'), 'review workspace');
       document.querySelector('[data-review-mode="quarter"]').click();
@@ -613,6 +683,7 @@ async function smokeAudit() {
         reopenSynced,
         durationSynced,
         deletionSynced,
+        dailyRitualSynced,
       };
     })()
   `, true);
@@ -641,6 +712,7 @@ async function smokeAudit() {
     !result.reopenSynced ||
     !result.durationSynced ||
     !result.deletionSynced ||
+    !result.dailyRitualSynced ||
     !smokeTask ||
     smokeTask.status !== 'completed' ||
     !smokeTask.deletedAt ||
@@ -1001,7 +1073,9 @@ async function deliverEndOfDayReminder() {
   const evaluation = evaluateEndOfDayReminder(store, now, { timeZone: DAYMARK_TIME_ZONE });
   if (!evaluation.due) return;
   const copy = notificationCopy(evaluation);
-  new Notification({ title: copy.title, body: copy.body }).show();
+  const notification = new Notification({ title: copy.title, body: copy.body });
+  notification.on('click', showAndFocusDailyShutdown);
+  notification.show();
   await todoStore.execute({
     type: 'markEndOfDayReminderFired',
     eventId: `end-of-day-reminder-${evaluation.date}`,

@@ -20,4 +20,5 @@ contextBridge.exposeInMainWorld('daymark', {
   cancelAiReport: (requestId) => ipcRenderer.invoke('ai:cancel', { requestId }),
   onFocusNewTask: (callback) => subscribe('app:focus-new-task', callback),
   onFocusSearch: (callback) => subscribe('app:focus-search', callback),
+  onOpenDailyShutdown: (callback) => subscribe('app:open-daily-shutdown', callback),
 });

@@ -529,7 +529,9 @@ kbd {
 .task-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  column-gap: 7px;
+  row-gap: 5px;
   min-height: 15px;
   margin-top: 4px;
   color: var(--faint);
@@ -1220,6 +1222,152 @@ select:focus-visible {
   background: var(--danger);
 }
 
+.daily-ritual-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 10px 2px 0;
+  padding: 13px 14px;
+  border: 1px solid rgba(71, 107, 82, 0.13);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.57);
+}
+
+.ritual-status-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ritual-kicker {
+  color: var(--accent);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.ritual-status-copy strong {
+  font-size: 11px;
+}
+
+.ritual-status-copy small {
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ritual-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 9px;
+}
+
+.ritual-actions button {
+  min-height: 36px;
+  margin: 0;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  font-size: 10px;
+  font-weight: 720;
+  box-shadow: none;
+  transition: transform 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+#plan-today {
+  border-color: rgba(71, 107, 82, 0.1);
+  background: rgba(71, 107, 82, 0.09);
+  color: var(--accent-strong);
+}
+
+#plan-today:hover {
+  border-color: rgba(71, 107, 82, 0.18);
+  background: rgba(71, 107, 82, 0.14);
+}
+
+#shutdown-today {
+  position: relative;
+  padding-right: 16px;
+  padding-left: 31px;
+  border-color: rgba(54, 85, 63, 0.18);
+  background: linear-gradient(145deg, #52785d, var(--accent));
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(54, 85, 63, 0.18);
+}
+
+#shutdown-today::before {
+  position: absolute;
+  top: 50%;
+  left: 15px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.12);
+  content: "";
+  transform: translateY(-50%);
+}
+
+#shutdown-today:hover {
+  border-color: rgba(54, 85, 63, 0.28);
+  background: linear-gradient(145deg, #5a8266, #3f624a);
+  box-shadow: 0 8px 18px rgba(54, 85, 63, 0.23);
+  transform: translateY(-1px);
+}
+
+.ritual-actions button:active {
+  box-shadow: none;
+  transform: translateY(0);
+}
+
+.today-task-group {
+  display: grid;
+  gap: 7px;
+}
+
+.today-task-group + .today-task-group {
+  margin-top: 17px;
+}
+
+.today-task-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 4px 1px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.today-task-group-heading span {
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding-inline: 5px;
+  border-radius: 99px;
+  background: rgba(47, 63, 49, 0.07);
+  color: var(--faint);
+  font-size: 8px;
+}
+
+.task-meta .today-reason-pill {
+  border: 1px solid rgba(71, 107, 82, 0.17);
+  background: rgba(223, 233, 223, 0.7);
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.task-meta .today-reason-pill.is-overdue {
+  border-color: rgba(163, 76, 67, 0.18);
+  background: rgba(163, 76, 67, 0.08);
+  color: var(--danger);
+}
+
 .today-capacity label {
   display: flex;
   align-items: center;
@@ -1251,13 +1399,24 @@ select:focus-visible {
 
 .task-meta .meta-pill {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
+  max-width: 100%;
   min-height: 19px;
   padding: 1px 6px;
+  overflow: hidden;
   border-radius: 6px;
   background: rgba(47, 63, 49, 0.06);
   color: var(--muted);
   font-size: 9px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.task-meta .meta-pill svg {
+  flex: none;
 }
 
 .task-meta .top3-pill {
@@ -1344,6 +1503,230 @@ select:focus-visible {
   background: #fff;
   font-size: 11px;
   line-height: 1.5;
+}
+
+.ritual-dialog {
+  width: min(720px, calc(100vw - 40px));
+  max-height: min(760px, calc(100vh - 40px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid rgba(50, 61, 49, 0.14);
+  border-radius: 18px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 28px 80px rgba(31, 40, 33, 0.28);
+}
+
+.ritual-dialog::backdrop {
+  background: rgba(31, 39, 33, 0.34);
+  backdrop-filter: blur(3px);
+}
+
+.ritual-dialog form {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: min(760px, calc(100vh - 40px));
+}
+
+.ritual-dialog-header,
+.ritual-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+}
+
+.ritual-dialog-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.ritual-dialog-header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.ritual-dialog-header h2 {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 22px;
+}
+
+.ritual-dialog-header p,
+.ritual-dialog-footer span {
+  margin: 0;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.ritual-dialog-body {
+  padding: 18px 20px;
+  overflow: auto;
+}
+
+.ritual-dialog-footer {
+  border-top: 1px solid var(--line);
+}
+
+.ritual-dialog-footer button {
+  min-height: 36px;
+  padding-inline: 15px;
+  font-size: 10px;
+}
+
+.ritual-summary {
+  margin-bottom: 13px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.ritual-task-list,
+.shutdown-task-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ritual-candidate,
+.shutdown-task {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fff;
+}
+
+.ritual-candidate {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.ritual-candidate > input,
+.ritual-top3 input {
+  accent-color: var(--accent);
+}
+
+.ritual-task-copy,
+.shutdown-task-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ritual-task-copy strong,
+.shutdown-task-copy strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ritual-task-copy small,
+.shutdown-task-copy small {
+  color: var(--faint);
+  font-size: 9px;
+}
+
+.ritual-defer {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(120px, 0.8fr);
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.ritual-defer[hidden] {
+  display: none;
+}
+
+.ritual-defer select,
+.ritual-defer input {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 9px;
+}
+
+.ritual-top3 {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #986526;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.ritual-empty {
+  margin: 10px 0;
+  padding: 18px;
+  border: 1px dashed rgba(71, 107, 82, 0.2);
+  border-radius: 12px;
+  color: var(--faint);
+  font-size: 10px;
+  text-align: center;
+}
+
+.shutdown-task {
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 190px);
+}
+
+.shutdown-action {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.shutdown-action select,
+.shutdown-action input,
+.shutdown-notes input,
+.shutdown-notes textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.shutdown-action select,
+.shutdown-action input,
+.shutdown-notes input {
+  height: 32px;
+  padding: 0 9px;
+}
+
+.shutdown-notes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 11px;
+  margin-top: 17px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.shutdown-notes label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 680;
+}
+
+.shutdown-notes label:first-child {
+  grid-column: 1 / -1;
+}
+
+.shutdown-notes textarea {
+  padding: 9px;
+  resize: vertical;
+  line-height: 1.45;
 }
 
 .field-row {
@@ -1595,8 +1978,12 @@ select:focus-visible {
 }
 
 .primary-button {
+  border: 0;
+  border-radius: 10px;
   background: var(--accent);
   color: #fff;
+  font-weight: 680;
+  cursor: pointer;
 }
 
 .primary-button:disabled,
