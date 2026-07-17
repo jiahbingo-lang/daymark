@@ -75,6 +75,18 @@ test('disabled reminders and days with no pending work remain silent', () => {
   assert.equal(evaluateEndOfDayReminder(empty, '2026-07-16T12:00:00.000Z').due, false);
 });
 
+test('a completed daily shutdown suppresses the reminder even when pending tasks remain', () => {
+  const source = store([task('today', { plannedDate: '2026-07-16' })], {
+    dailyPlans: {
+      '2026-07-16': { shutdownCompletedAt: '2026-07-16T09:00:00.000Z' },
+    },
+  });
+  const evaluation = evaluateEndOfDayReminder(source, '2026-07-16T12:00:00.000Z');
+  assert.equal(evaluation.due, false);
+  assert.equal(evaluation.alreadyShutdown, true);
+  assert.equal(evaluation.pending.length, 1);
+});
+
 test('notification copy summarizes at most three task titles', () => {
   const evaluation = {
     pending: [task('a'), task('b'), task('c'), task('d')],

@@ -427,6 +427,60 @@ test('end-of-day reminder settings and delivery date are persisted as audited me
   }), /HH:mm/);
 });
 
+test('daily planning and shutdown lifecycle is persisted without copying task state', () => {
+  let store = sanitizeStore({ version: 1, tasks: [] }, { now: NOW, timeZone: 'Asia/Shanghai' });
+  assert.deepEqual(store.meta.dailyPlans, {});
+
+  store = applyCommand(store, {
+    type: 'startDailyPlan', eventId: 'plan-start', occurredAt: '2026-07-16T00:00:00.000Z',
+    payload: { date: '2026-07-16' },
+  });
+  store = applyCommand(store, {
+    type: 'completeDailyPlan', eventId: 'plan-complete', occurredAt: '2026-07-16T00:05:00.000Z',
+    payload: { date: '2026-07-16' },
+  });
+  store = applyCommand(store, {
+    type: 'completeDailyShutdown', eventId: 'shutdown-complete', occurredAt: '2026-07-16T10:00:00.000Z',
+    payload: {
+      date: '2026-07-16',
+      shutdownNote: '完成核心交付',
+      blockerNote: '等待外部数据',
+      tomorrowFocus: '处理验收反馈',
+      blockedTaskIds: ['missing-task'],
+    },
+  });
+
+  const plan = store.meta.dailyPlans['2026-07-16'];
+  assert.equal(plan.planningStartedAt, '2026-07-16T00:00:00.000Z');
+  assert.equal(plan.planningCompletedAt, '2026-07-16T00:05:00.000Z');
+  assert.equal(plan.shutdownCompletedAt, '2026-07-16T10:00:00.000Z');
+  assert.equal(plan.shutdownNote, '完成核心交付');
+  assert.equal(plan.blockerNote, '等待外部数据');
+  assert.equal(plan.tomorrowFocus, '处理验收反馈');
+  assert.deepEqual(plan.blockedTaskIds, []);
+  assert.deepEqual(store.events.slice(-3).map((event) => event.type), [
+    'startDailyPlan', 'completeDailyPlan', 'completeDailyShutdown',
+  ]);
+
+  const retried = applyCommand(store, {
+    type: 'completeDailyShutdown', eventId: 'shutdown-complete', occurredAt: '2026-07-16T11:00:00.000Z',
+    payload: { date: '2026-07-16', shutdownNote: '不应覆盖' },
+  });
+  assert.deepEqual(retried, store);
+
+  const semanticRetry = applyCommand(store, {
+    type: 'completeDailyShutdown', eventId: 'shutdown-complete-again', occurredAt: '2026-07-16T12:00:00.000Z',
+    payload: { date: '2026-07-16', shutdownNote: '不同事件 ID 也不应覆盖' },
+  });
+  assert.deepEqual(semanticRetry, store);
+
+  const planRetry = applyCommand(store, {
+    type: 'completeDailyPlan', eventId: 'plan-complete-again', occurredAt: '2026-07-16T12:00:00.000Z',
+    payload: { date: '2026-07-16' },
+  });
+  assert.deepEqual(planRetry, store);
+});
+
 test('deleted tasks can be restored and reminder delivery is persisted', () => {
   let store = sanitizeStore({ version: 1, tasks: [] }, { now: NOW, timeZone: 'UTC' });
   store = applyCommand(store, {

@@ -167,6 +167,38 @@ test('the same event id is idempotent and queued commands cannot race', async (t
   assert.deepEqual(result.events.map((event) => event.eventId), ['A', 'B', 'C']);
 });
 
+test('daily planning and shutdown survive a store restart and remain idempotent', async (t) => {
+  const context = await fixture({ timeZone: 'Asia/Shanghai' });
+  t.after(context.cleanup);
+  const date = '2026-07-16';
+  await context.store.execute({
+    type: 'startDailyPlan', eventId: 'plan-start', occurredAt: NOW, payload: { date },
+  });
+  await context.store.execute({
+    type: 'completeDailyPlan', eventId: 'plan-complete', occurredAt: NOW, payload: { date },
+  });
+  await context.store.execute({
+    type: 'completeDailyShutdown',
+    eventId: 'shutdown-complete',
+    occurredAt: NOW,
+    payload: { date, shutdownNote: '完成交付', tomorrowFocus: '整理复盘' },
+  });
+  await context.store.execute({
+    type: 'completeDailyShutdown',
+    eventId: 'shutdown-complete-again',
+    occurredAt: NOW,
+    payload: { date, shutdownNote: '不应覆盖' },
+  });
+
+  const reopened = createTodoStore(context.filePath, context.config);
+  const result = await reopened.load();
+  assert.equal(result.meta.dailyPlans[date].shutdownNote, '完成交付');
+  assert.equal(result.meta.dailyPlans[date].tomorrowFocus, '整理复盘');
+  assert.equal(Boolean(result.meta.dailyPlans[date].planningCompletedAt), true);
+  assert.equal(Boolean(result.meta.dailyPlans[date].shutdownCompletedAt), true);
+  assert.deepEqual(result.events.map((event) => event.eventId), ['plan-start', 'plan-complete', 'shutdown-complete']);
+});
+
 test('a second write keeps the previous valid v2 file as a backup', async (t) => {
   const context = await fixture();
   t.after(context.cleanup);
