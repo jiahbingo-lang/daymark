@@ -114,6 +114,43 @@
     return groups;
   }
 
+  function completedDate(task, timeZone = 'Asia/Shanghai') {
+    if (!task?.completedAt) return null;
+    const value = new Date(task?.completedAt);
+    if (Number.isNaN(value.getTime())) return null;
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).formatToParts(value);
+      const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+      return `${values.year}-${values.month}-${values.day}`;
+    } catch {
+      return value.toISOString().slice(0, 10);
+    }
+  }
+
+  function groupCompletedTasks(tasks, timeZone = 'Asia/Shanghai') {
+    const byDate = new Map();
+    (Array.isArray(tasks) ? tasks : [])
+      .filter((task) => task && !task.deletedAt && task.status === 'completed')
+      .sort((left, right) => String(right.completedAt || '').localeCompare(String(left.completedAt || '')))
+      .forEach((task) => {
+        const date = completedDate(task, timeZone);
+        if (!byDate.has(date)) byDate.set(date, []);
+        byDate.get(date).push(task);
+      });
+    return [...byDate.entries()]
+      .sort(([left], [right]) => {
+        if (left === null) return 1;
+        if (right === null) return -1;
+        return right.localeCompare(left);
+      })
+      .map(([date, groupedTasks]) => ({ date, tasks: groupedTasks }));
+  }
+
   function pendingShutdownTasks(store, date) {
     return activeTasks(store).filter((task) => Boolean(
       (task.plannedDate && task.plannedDate <= date) ||
@@ -136,6 +173,8 @@
     dailyPlanningCandidates,
     todayReason,
     groupTodayTasks,
+    completedDate,
+    groupCompletedTasks,
     pendingShutdownTasks,
     dailyPlanForDate,
     shutdownComplete,

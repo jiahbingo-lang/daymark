@@ -33,6 +33,7 @@ const APP_ASSETS = new Map([
   ['/src/styles.css', 'text/css; charset=utf-8'],
   ['/src/domain.js', 'text/javascript; charset=utf-8'],
   ['/src/planning.js', 'text/javascript; charset=utf-8'],
+  ['/src/execution.js', 'text/javascript; charset=utf-8'],
   ['/src/daily-planning.js', 'text/javascript; charset=utf-8'],
   ['/src/reporting.js', 'text/javascript; charset=utf-8'],
   ['/src/calendar.js', 'text/javascript; charset=utf-8'],
@@ -693,7 +694,7 @@ async function smokeAudit() {
   if (
     !result.ready ||
     result.title !== 'Daymark' ||
-    result.state.version !== 2 ||
+    result.state.version !== 3 ||
     result.state.reviewMode !== 'quarter' ||
     !result.reportTitle.includes('季度工作总结') ||
     /\b[1-9]\d*\b/.test(result.completedMetric) ||

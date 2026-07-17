@@ -271,6 +271,32 @@
     }, 0);
   }
 
+  function actualTimeForDate(store, date) {
+    const tasks = new Map((Array.isArray(store?.tasks) ? store.tasks : [])
+      .filter((task) => taskId(task) && !isDeleted(task))
+      .map((task) => [taskId(task), task]));
+    const groups = new Map();
+    (Array.isArray(store?.timeEntries) ? store.timeEntries : []).forEach((entry) => {
+      if (entry?.reportingDate !== date || !entry.endedAt || !tasks.has(entry.taskId)) return;
+      const seconds = Math.max(0, Number(entry.durationSeconds) || 0);
+      if (!seconds) return;
+      groups.set(entry.taskId, (groups.get(entry.taskId) || 0) + seconds);
+    });
+    const entries = [...groups.entries()].map(([id, seconds]) => {
+      const task = tasks.get(id);
+      return {
+        taskId: id,
+        title: task?.title || '未命名任务',
+        area: areaName(task),
+        minutes: Math.round(seconds / 60),
+      };
+    }).sort((left, right) => right.minutes - left.minutes || left.title.localeCompare(right.title, 'zh-CN'));
+    return {
+      minutes: entries.reduce((total, entry) => total + entry.minutes, 0),
+      entries,
+    };
+  }
+
   function percentage(numerator, denominator) {
     if (!denominator) return null;
     return Math.round((numerator / denominator) * 1000) / 10;
@@ -401,6 +427,7 @@
     const dailyNotes = noteAtCutoff(store, reportingDate, options, events, cutoffSeq);
     const capacityMinutes = capacityAtCutoff(store, options, events, cutoffSeq);
     const finalizedAt = options.finalizedAt || null;
+    const actualTime = actualTimeForDate(store, reportingDate);
 
     return {
       date: reportingDate,
@@ -418,6 +445,7 @@
       deleted,
       reopened,
       carried,
+      actualTime: actualTime.entries,
       summary: {
         plannedCount: planned.length,
         completedCount: completed.length,
@@ -432,6 +460,7 @@
         top3CompletionRate: percentage(top3Completed.length, top3.length),
         plannedMinutes: sumMinutes(planned),
         completedMinutes: sumMinutes(completed),
+        actualMinutes: actualTime.minutes,
       },
       dataIntegrity: dailyIntegrity(store, reportingDate, missingSnapshots),
     };
@@ -557,6 +586,8 @@
     const top3Completed = top3.filter(
       (task) => completedIds.has(taskId(task)) && !reopenedIds.has(taskId(task)),
     );
+    const actualTime = actualTimeForDate(store, result.date);
+    result.actualTime = actualTime.entries;
     result.summary = {
       ...(isObject(result.summary) ? result.summary : {}),
       plannedCount: planned.length,
@@ -572,6 +603,7 @@
       top3CompletionRate: percentage(top3Completed.length, top3.length),
       plannedMinutes: sumPlannedMinutes(planned),
       completedMinutes: sumMinutes(completed),
+      actualMinutes: actualTime.minutes,
     };
     return result;
   }
@@ -583,7 +615,8 @@
       // belongs to its completion date. Keep `created` for audit totals only.
       ['planned', 'completed', 'deleted', 'reopened'].some(
         (key) => recordArrays(record, key).length > 0,
-      ) || Boolean(String(record?.dailyNotes || '').trim())
+      ) || numberOrZero(record?.summary?.actualMinutes) > 0
+      || Boolean(String(record?.dailyNotes || '').trim())
     );
   }
 
@@ -600,6 +633,7 @@
       carried: 0,
       plannedMinutes: 0,
       completedMinutes: 0,
+      actualMinutes: 0,
       capacityMinutes: 0,
     };
     const plannedIds = new Set();
@@ -618,6 +652,7 @@
       result.carried += recordArrays(record, 'carried').length;
       result.plannedMinutes += sumPlannedMinutes(planned);
       result.completedMinutes += sumMinutes(completed);
+      result.actualMinutes += numberOrZero(record?.summary?.actualMinutes);
       result.capacityMinutes += numberOrZero(record?.dailyCapacityMinutes ?? record?.capacityMinutes);
     });
     result.planned = plannedIds.size;
@@ -753,6 +788,7 @@
           completedPlannedIds: new Set(),
           plannedMinutes: 0,
           completedMinutes: 0,
+          actualMinutes: 0,
         });
       }
       return areas.get(name);
@@ -777,6 +813,11 @@
         area.completedIds.add(taskId(task) || `${record.date}:${task?.title || ''}`);
         area.completedMinutes += numberOrZero(task?.estimateMinutes);
       });
+      recordArrays(record, 'actualTime').forEach((entry) => {
+        const area = ensureArea(String(entry?.area || '').trim() || '未分类');
+        area.activeDates.add(record.date);
+        area.actualMinutes += numberOrZero(entry?.minutes);
+      });
     });
     const byArea = [...areas.values()]
       .map((area) => ({
@@ -788,6 +829,7 @@
         completionRate: percentage(area.completedPlannedIds.size, area.plannedIds.size),
         plannedMinutes: area.plannedMinutes,
         completedMinutes: area.completedMinutes,
+        actualMinutes: area.actualMinutes,
       }))
       .sort((left, right) => right.completed - left.completed || right.planned - left.planned || left.area.localeCompare(right.area, 'zh-CN'));
 
@@ -850,6 +892,20 @@
       .filter((record) => String(record?.dailyNotes || '').trim())
       .map((record) => ({ date: record.date, note: String(record.dailyNotes).trim() }));
 
+    const dailyFocus = records
+      .filter((record) => numberOrZero(record?.summary?.actualMinutes) > 0)
+      .map((record) => ({
+        date: record.date,
+        minutes: numberOrZero(record.summary.actualMinutes),
+        tasks: recordArrays(record, 'actualTime'),
+      }));
+    const timeAnalysis = {
+      actualMinutes: totals.actualMinutes,
+      estimatedCompletedMinutes: totals.completedMinutes,
+      deviationMinutes: totals.actualMinutes - totals.completedMinutes,
+      dailyFocus,
+    };
+
     const title = quarter === null ? `${year} 年度工作总结` : `${year} 年第 ${quarter} 季度工作总结`;
     return {
       type: quarter === null ? 'year' : 'quarter',
@@ -876,6 +932,7 @@
       quarterlyTrend,
       longCarried,
       dailyNotes,
+      timeAnalysis,
       dataIntegrity: reportIntegrity(store, records, startDate, effectiveEnd >= startDate ? effectiveEnd : null),
     };
   }
@@ -917,6 +974,7 @@
       `- 计划内完成：${totals.completedPlanned || 0} 项`,
       `- 计划完成率：${rateLabel(totals.completionRate)}`,
       `- 延续任务次数：${totals.carried || 0} 次`,
+      `- 实际投入：${totals.actualMinutes || 0} 分钟`,
       '',
       '## 每日 Top 3',
       '',
@@ -936,13 +994,25 @@
     if (report.highPriority?.items?.length) lines.push(...report.highPriority.items.map(taskLine));
     else lines.push('- 暂无完成记录');
 
-    lines.push('', '## 工作领域', '', '| 领域 | 活跃天数 | 计划 | 完成 | 计划完成率 |', '| --- | ---: | ---: | ---: | ---: |');
+    lines.push(
+      '',
+      '## 时间投入',
+      '',
+      `- 完成任务预计用时：${report.timeAnalysis?.estimatedCompletedMinutes || 0} 分钟`,
+      `- 实际记录用时：${report.timeAnalysis?.actualMinutes || 0} 分钟`,
+      `- 实际与预计偏差：${(report.timeAnalysis?.deviationMinutes || 0) >= 0 ? '+' : ''}${report.timeAnalysis?.deviationMinutes || 0} 分钟`,
+      '',
+      '## 工作领域',
+      '',
+      '| 领域 | 活跃天数 | 计划 | 完成 | 计划完成率 | 实际用时 |',
+      '| --- | ---: | ---: | ---: | ---: | ---: |',
+    );
     if (report.byArea?.length) {
       report.byArea.forEach((area) => {
-        lines.push(`| ${markdownCell(area.area)} | ${area.activeDays} | ${area.planned} | ${area.completed} | ${rateLabel(area.completionRate)} |`);
+        lines.push(`| ${markdownCell(area.area)} | ${area.activeDays} | ${area.planned} | ${area.completed} | ${rateLabel(area.completionRate)} | ${area.actualMinutes || 0} 分钟 |`);
       });
     } else {
-      lines.push('| 暂无数据 | 0 | 0 | 0 | — |');
+      lines.push('| 暂无数据 | 0 | 0 | 0 | — | 0 分钟 |');
     }
 
     lines.push('', '## 月度趋势', '', '| 月份 | 活跃天数 | 计划 | 完成 | 计划完成率 |', '| --- | ---: | ---: | ---: | ---: |');

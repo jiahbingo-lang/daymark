@@ -102,6 +102,7 @@
       top3CompletionRate: null,
       plannedMinutes: 0,
       completedMinutes: 0,
+      actualMinutes: 0,
     };
   }
 
@@ -118,6 +119,7 @@
       created: Array.isArray(detail.created) ? detail.created : [],
       deleted: Array.isArray(detail.deleted) ? detail.deleted : [],
       reopened: Array.isArray(detail.reopened) ? detail.reopened : [],
+      actualTime: Array.isArray(detail.actualTime) ? detail.actualTime : [],
       summary: { ...emptySummary(), ...(detail.summary || {}) },
       dataIntegrity: detail.dataIntegrity || {
         status: 'complete',
@@ -176,6 +178,9 @@
       const completionDate = taskDateInTimeZone(task?.completedAt, source?.meta?.timeZone);
       if (isDate(completionDate)) liveDates.add(completionDate);
     });
+    (Array.isArray(source.timeEntries) ? source.timeEntries : []).forEach((entry) => {
+      if (isDate(entry?.reportingDate) && entry?.endedAt) liveDates.add(entry.reportingDate);
+    });
     Object.keys(schedule.byDate).forEach((date) => liveDates.add(date));
 
     for (let index = 0; index < 42; index += 1) {
@@ -190,6 +195,7 @@
           : normalizeDetail(null, date);
       const plannedCount = Number(detail.summary?.plannedCount) || detail.planned.length;
       const completedCount = Number(detail.summary?.completedCount) || detail.completed.length;
+      const actualMinutes = Number(detail.summary?.actualMinutes) || 0;
       let completionRate = detail.summary?.completionRate;
       if (!Number.isFinite(completionRate)) completionRate = plannedCount ? Math.round((completedCount / plannedCount) * 100) : null;
       cells.push({
@@ -199,7 +205,7 @@
         isToday: date === today,
         holiday: getChinaHoliday(date),
         rangeCount: detail.range.length,
-        metrics: { plannedCount, completedCount, completionRate },
+        metrics: { plannedCount, completedCount, completionRate, actualMinutes },
       });
     }
 

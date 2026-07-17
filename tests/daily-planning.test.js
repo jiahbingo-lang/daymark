@@ -4,6 +4,7 @@ const {
   dailyPlanningCandidates,
   todayReason,
   groupTodayTasks,
+  groupCompletedTasks,
   pendingShutdownTasks,
   shutdownComplete,
 } = require('../src/daily-planning');
@@ -72,6 +73,21 @@ test('today grouping is exclusive and keeps Top 3 visually separate', () => {
   assert.deepEqual(groups.planned.map((item) => item.id), ['planned']);
   assert.deepEqual(groups.overdue.map((item) => item.id), ['overdue']);
   assert.deepEqual(groups.other.map((item) => item.id), ['due-only']);
+});
+
+test('completed tasks are grouped by China completion date with newest groups first', () => {
+  const groups = groupCompletedTasks([
+    task('yesterday', { status: 'completed', completedAt: '2026-07-15T15:30:00.000Z' }),
+    task('today-late', { status: 'completed', completedAt: '2026-07-16T03:00:00.000Z' }),
+    task('today-boundary', { status: 'completed', completedAt: '2026-07-15T16:30:00.000Z' }),
+    task('missing-date', { status: 'completed', completedAt: null }),
+    task('active'),
+  ], 'Asia/Shanghai');
+  assert.deepEqual(groups.map((group) => [group.date, group.tasks.map((item) => item.id)]), [
+    ['2026-07-16', ['today-late', 'today-boundary']],
+    ['2026-07-15', ['yesterday']],
+    [null, ['missing-date']],
+  ]);
 });
 
 test('shutdown pending work follows live tasks and completion state follows the daily plan', () => {

@@ -121,14 +121,52 @@
       });
   }
 
+  function manualScheduleBlocks(input, tasks) {
+    const taskMap = new Map(tasks.map((task) => [task.id, task]));
+    return (Array.isArray(input?.scheduleBlocks) ? input.scheduleBlocks : [])
+      .filter((block) => {
+        const task = taskMap.get(block?.taskId);
+        const range = taskRange(task);
+        const start = Number(block?.startMinute);
+        const duration = Number(block?.durationMinutes);
+        return Boolean(
+          task
+          && range
+          && block?.source !== 'auto'
+          && isDate(block?.date)
+          && block.date >= range.startDate
+          && block.date <= range.endDate
+          && Number.isFinite(start)
+          && start >= 0
+          && Number.isFinite(duration)
+          && duration > 0,
+        );
+      })
+      .map((block) => ({
+        ...clone(block),
+        startMinute: Math.max(0, Math.min(1435, Math.round(Number(block.startMinute)))),
+        durationMinutes: Math.max(5, Math.min(720, Math.round(Number(block.durationMinutes)))),
+        source: 'manual',
+        locked: block.locked !== false,
+      }));
+  }
+
   function buildSchedule(input, options = {}) {
     const capacity = capacityValue(input, options);
+    const tasks = schedulableTasks(input);
+    const manualBlocks = manualScheduleBlocks(input, tasks);
+    const manualByTaskDate = new Map();
     const usedByDate = new Map();
+    manualBlocks.forEach((block) => {
+      const key = `${block.taskId}:${block.date}`;
+      manualByTaskDate.set(key, (manualByTaskDate.get(key) || 0) + block.durationMinutes);
+      usedByDate.set(block.date, (usedByDate.get(block.date) || 0) + block.durationMinutes);
+    });
     const blocks = [];
     const byTask = {};
     const byDate = {};
 
-    schedulableTasks(input).forEach((task) => {
+    tasks.forEach((task) => {
       const range = taskRange(task);
       const dates = datesInRange(range.startDate, range.endDate);
       let eligibleDates = dates.filter(isChinaWorkday);
@@ -136,7 +174,11 @@
       const eligible = new Set(eligibleDates);
       const estimate = Number(task.estimateMinutes);
       const hasEstimate = Number.isFinite(estimate) && estimate > 0;
-      let remaining = hasEstimate ? Math.round(estimate) : 0;
+      const manualTotal = dates.reduce(
+        (total, date) => total + (manualByTaskDate.get(`${task.id}:${date}`) || 0),
+        0,
+      );
+      let remaining = hasEstimate ? Math.max(0, Math.round(estimate) - manualTotal) : 0;
       const allocations = new Map(dates.map((date) => [date, hasEstimate ? 0 : null]));
 
       if (hasEstimate) {
@@ -158,19 +200,27 @@
         });
       }
 
-      const taskBlocks = dates.map((date) => ({
-        taskId: task.id,
-        date,
-        startDate: range.startDate,
-        endDate: range.endDate,
-        phase: phaseForDate(date, range),
-        isWorkday: isChinaWorkday(date),
-        isPlanningDay: eligible.has(date),
-        scheduledMinutes: allocations.get(date),
-        needsEstimate: !hasEstimate,
-        overflowMinutes: date === range.endDate ? remaining : 0,
-        invalidRange: range.invalid,
-      }));
+      const taskBlocks = dates.map((date) => {
+        const manualScheduledMinutes = manualByTaskDate.get(`${task.id}:${date}`) || 0;
+        const autoScheduledMinutes = allocations.get(date);
+        return {
+          taskId: task.id,
+          date,
+          startDate: range.startDate,
+          endDate: range.endDate,
+          phase: phaseForDate(date, range),
+          isWorkday: isChinaWorkday(date),
+          isPlanningDay: eligible.has(date) || manualScheduledMinutes > 0,
+          autoScheduledMinutes,
+          manualScheduledMinutes,
+          scheduledMinutes: hasEstimate
+            ? (Number(autoScheduledMinutes) || 0) + manualScheduledMinutes
+            : null,
+          needsEstimate: !hasEstimate,
+          overflowMinutes: date === range.endDate ? remaining : 0,
+          invalidRange: range.invalid,
+        };
+      });
       byTask[task.id] = taskBlocks;
       taskBlocks.forEach((block) => {
         blocks.push(block);
@@ -185,6 +235,7 @@
       blocks,
       byTask,
       byDate,
+      manualBlocks,
     };
   }
 

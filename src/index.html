@@ -8,7 +8,7 @@
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daymark</title>
-    <link rel="stylesheet" href="./styles.css?v=2" />
+    <link rel="stylesheet" href="./styles.css?v=6" />
   </head>
   <body>
     <div class="app-shell">
@@ -62,6 +62,12 @@
 
         <div class="nav-divider"></div>
         <nav class="nav-list" aria-label="工作回顾">
+          <button class="nav-item" type="button" data-view="execution">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3" /><path d="M8 3v4M16 3v4M4 10h16M8 14h3M13 14h3M8 17h5" /></svg>
+            </span>
+            <span>执行日历</span>
+          </button>
           <button class="nav-item" type="button" data-view="review">
             <span class="nav-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M5 19V9M10 19V5M15 19v-7M20 19V3" /></svg>
@@ -167,6 +173,50 @@
             <h2 id="empty-title">收件箱已经清空</h2>
             <p id="empty-copy">想到的新任务会先放在这里。</p>
             <button id="empty-action" class="secondary-button" type="button">添加任务</button>
+          </div>
+        </section>
+
+        <section class="execution-workspace" id="execution-workspace" hidden>
+          <div class="execution-heading">
+            <div>
+              <span class="review-kicker">DAYMARK · EXECUTE</span>
+              <h2>把计划落到时间里</h2>
+              <p>虚线是自动安排；拖动后会变成实线并锁定。所有时间按中国时间记录。</p>
+            </div>
+            <div class="execution-mode" role="tablist" aria-label="执行日历范围">
+              <button type="button" data-execution-mode="day" role="tab" aria-selected="false">日</button>
+              <button type="button" data-execution-mode="week" class="is-active" role="tab" aria-selected="true">周</button>
+            </div>
+          </div>
+
+          <section class="focus-strip" id="focus-strip" hidden aria-live="polite">
+            <span class="focus-pulse" aria-hidden="true"></span>
+            <div class="focus-copy">
+              <small>正在专注</small>
+              <strong id="focus-task-title">—</strong>
+            </div>
+            <time id="focus-elapsed">00:00:00</time>
+            <button type="button" class="secondary-button" id="stop-focus">暂停</button>
+            <button type="button" class="primary-button" id="complete-focus">完成任务</button>
+          </section>
+
+          <div class="execution-toolbar">
+            <div class="execution-date-nav">
+              <button type="button" class="icon-button" id="execution-previous" aria-label="上一周期">‹</button>
+              <input type="date" id="execution-date" aria-label="执行日历日期" />
+              <button type="button" class="icon-button" id="execution-next" aria-label="下一周期">›</button>
+              <button type="button" class="secondary-button" id="execution-today">回到今天</button>
+            </div>
+            <div class="execution-legend" aria-label="排程图例">
+              <span><i class="execution-legend-line is-auto"></i>自动安排</span>
+              <span><i class="execution-legend-line is-locked"></i>手动锁定</span>
+              <span><i class="execution-legend-line is-risk"></i>期限风险</span>
+            </div>
+          </div>
+
+          <div class="execution-summary" id="execution-summary"></div>
+          <div class="execution-calendar-scroll" id="execution-calendar-scroll">
+            <div class="execution-calendar" id="execution-calendar" aria-label="任务执行时间轴"></div>
           </div>
         </section>
 
@@ -445,6 +495,29 @@
       </form>
     </dialog>
 
+    <dialog class="ritual-dialog manual-time-dialog" id="manual-time-dialog" aria-labelledby="manual-time-title">
+      <form method="dialog" id="manual-time-form">
+        <header class="ritual-dialog-header">
+          <div>
+            <span class="ritual-kicker">ACTUAL TIME</span>
+            <h2 id="manual-time-title">补录实际用时</h2>
+            <p id="manual-time-task-title">选择任务后补录</p>
+          </div>
+          <button type="button" class="icon-button" data-close-dialog="manual-time-dialog" aria-label="关闭补录">×</button>
+        </header>
+        <div class="ritual-dialog-body manual-time-fields">
+          <input type="hidden" id="manual-time-task-id" />
+          <label>记录日期（中国时间）<input type="date" id="manual-time-date" required /></label>
+          <label>实际用时（分钟）<input type="number" id="manual-time-minutes" min="1" max="1440" step="5" value="30" required /></label>
+          <label>说明（可选）<input type="text" id="manual-time-note" maxlength="300" placeholder="例如：需求梳理与方案确认" /></label>
+        </div>
+        <footer class="ritual-dialog-footer">
+          <button type="button" class="secondary-button" data-close-dialog="manual-time-dialog">取消</button>
+          <button type="button" class="primary-button" id="save-manual-time">保存用时</button>
+        </footer>
+      </form>
+    </dialog>
+
     <dialog class="ritual-dialog shutdown-dialog" id="daily-shutdown-dialog" aria-labelledby="daily-shutdown-title">
       <form method="dialog" id="daily-shutdown-form">
         <header class="ritual-dialog-header">
@@ -478,12 +551,13 @@
     </div>
 
     <pre id="app-debug-state" hidden aria-hidden="true"></pre>
-    <script src="./domain.js"></script>
-    <script src="./planning.js"></script>
-    <script src="./daily-planning.js"></script>
-    <script src="./reporting.js"></script>
-    <script src="./calendar.js"></script>
-    <script src="./ai-report.js"></script>
-    <script src="./renderer.js"></script>
+    <script src="./domain.js?v=3"></script>
+    <script src="./planning.js?v=3"></script>
+    <script src="./execution.js?v=3"></script>
+    <script src="./daily-planning.js?v=2"></script>
+    <script src="./reporting.js?v=3"></script>
+    <script src="./calendar.js?v=3"></script>
+    <script src="./ai-report.js?v=3"></script>
+    <script src="./renderer.js?v=9"></script>
   </body>
 </html>

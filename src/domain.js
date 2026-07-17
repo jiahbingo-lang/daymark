@@ -1,5 +1,5 @@
 (function exposeDomain(global) {
-  const STORE_VERSION = 2;
+  const STORE_VERSION = 3;
   const PRIORITIES = ['none', 'low', 'medium', 'high'];
   const VIEWS = ['all', 'inbox', 'today', 'upcoming', 'completed'];
   const TASK_PATCH_FIELDS = [
@@ -256,6 +256,84 @@
     return result;
   }
 
+  function sanitizeScheduleBlock(input, options = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const id = normalizeOptionalText(input.id, 120);
+    const taskId = normalizeOptionalText(input.taskId, 120);
+    const date = normalizeDate(input.date);
+    const startMinute = normalizeInteger(input.startMinute, { min: 0, max: 1435, fallback: null });
+    const requestedDuration = normalizeInteger(input.durationMinutes, { min: 5, max: 720, fallback: null });
+    if (!id || !taskId || !date || startMinute === null || requestedDuration === null) return null;
+    const durationMinutes = Math.min(requestedDuration, 1440 - startMinute);
+    const fallbackTimestamp = isoNow(options.now);
+    const createdAt = normalizeIso(input.createdAt, fallbackTimestamp);
+    return {
+      id,
+      taskId,
+      date,
+      startMinute,
+      durationMinutes,
+      source: input.source === 'auto' ? 'auto' : 'manual',
+      locked: input.locked !== false,
+      createdAt,
+      updatedAt: normalizeIso(input.updatedAt, createdAt),
+    };
+  }
+
+  function sanitizeScheduleBlocks(value, options = {}) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    return value
+      .map((block) => sanitizeScheduleBlock(block, options))
+      .filter((block) => {
+        if (!block || seen.has(block.id)) return false;
+        seen.add(block.id);
+        return true;
+      })
+      .slice(0, 20_000);
+  }
+
+  function sanitizeTimeEntry(input, options = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const id = normalizeOptionalText(input.id, 120);
+    const taskId = normalizeOptionalText(input.taskId, 120);
+    const startedAt = normalizeIso(input.startedAt, null);
+    if (!id || !taskId || !startedAt) return null;
+    const endedAt = normalizeIso(input.endedAt, null);
+    const calculatedSeconds = endedAt
+      ? Math.max(0, Math.round((new Date(endedAt) - new Date(startedAt)) / 1000))
+      : 0;
+    const durationSeconds = normalizeInteger(input.durationSeconds, {
+      min: 0,
+      max: 31_536_000,
+      fallback: calculatedSeconds,
+    });
+    const timeZone = normalizeTimeZone(options.timeZone);
+    return {
+      id,
+      taskId,
+      startedAt,
+      endedAt,
+      durationSeconds,
+      reportingDate: normalizeDate(input.reportingDate) || dateInTimeZone(startedAt, timeZone),
+      source: input.source === 'manual' ? 'manual' : 'focus',
+      note: normalizeText(input.note, 1000),
+    };
+  }
+
+  function sanitizeTimeEntries(value, options = {}) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    return value
+      .map((entry) => sanitizeTimeEntry(entry, options))
+      .filter((entry) => {
+        if (!entry || seen.has(entry.id)) return false;
+        seen.add(entry.id);
+        return true;
+      })
+      .slice(0, 100_000);
+  }
+
   function sanitizeEvent(input) {
     if (!input || typeof input !== 'object') return null;
     const eventId = normalizeOptionalText(input.eventId, 180);
@@ -320,6 +398,8 @@
       tasks,
       events,
       dailyArchives: [],
+      scheduleBlocks: [],
+      timeEntries: [],
     };
   }
 
@@ -363,17 +443,19 @@
       tasks,
       events,
       dailyArchives: sanitizeArchives(input?.dailyArchives),
+      scheduleBlocks: sanitizeScheduleBlocks(input?.scheduleBlocks, { now: fallbackDate }),
+      timeEntries: sanitizeTimeEntries(input?.timeEntries, { timeZone }),
     };
   }
 
   function sanitizeStore(input, options = {}) {
     const rawVersion = input?.version;
     const version = rawVersion === undefined || rawVersion === null ? 1 : Number(rawVersion);
-    if (!Number.isInteger(version) || ![1, STORE_VERSION].includes(version)) {
+    if (!Number.isInteger(version) || ![1, 2, STORE_VERSION].includes(version)) {
       throw new Error(`Unsupported store version: ${rawVersion}`);
     }
-    if (version === STORE_VERSION) return sanitizeV2(input, options);
-    return migrateV1(input, options);
+    if (version === 1) return migrateV1(input, options);
+    return sanitizeV2(input, options);
   }
 
   function updateTask(task, patch, now = new Date()) {
@@ -597,6 +679,12 @@
       'startDailyPlan',
       'completeDailyPlan',
       'completeDailyShutdown',
+      'upsertScheduleBlock',
+      'deleteScheduleBlock',
+      'startFocus',
+      'stopFocus',
+      'addManualTime',
+      'deleteTimeEntry',
     ];
     if (!supported.includes(command.type)) throw new Error(`Unsupported command: ${command.type}`);
 
@@ -617,6 +705,8 @@
       tasks: [...store.tasks],
       events: [...store.events],
       dailyArchives: [...store.dailyArchives],
+      scheduleBlocks: [...store.scheduleBlocks],
+      timeEntries: [...store.timeEntries],
     };
     let taskId = normalizeOptionalText(command.taskId || commandValue(command, 'id'), 120);
     let before = null;
@@ -765,6 +855,112 @@
       after = sanitizeDailyPlan(plan, date);
       next.meta.dailyPlans[date] = after;
       taskId = null;
+    } else if (command.type === 'upsertScheduleBlock') {
+      const task = activeTaskById(next.tasks, taskId);
+      if (!task || task.status === 'completed' || !task.plannedDate) {
+        throw new Error(`Schedulable task not found: ${taskId}`);
+      }
+      const blockId = normalizeOptionalText(commandValue(command, 'blockId') || commandValue(command, 'id'), 120)
+        || makeId('block');
+      const existing = next.scheduleBlocks.find((block) => block.id === blockId) || null;
+      if (existing && existing.taskId !== task.id) throw new Error('Schedule block task cannot change');
+      const block = sanitizeScheduleBlock({
+        ...existing,
+        id: blockId,
+        taskId: task.id,
+        date: commandValue(command, 'date'),
+        startMinute: commandValue(command, 'startMinute'),
+        durationMinutes: commandValue(command, 'durationMinutes'),
+        source: 'manual',
+        locked: commandValue(command, 'locked') !== false,
+        createdAt: existing?.createdAt || occurredAt,
+        updatedAt: occurredAt,
+      }, { now: occurredDate });
+      if (!block) throw new Error('Invalid schedule block');
+      if (block.date < task.plannedDate || (task.dueDate && block.date > task.dueDate)) {
+        throw new Error('Schedule block must stay inside the task date range');
+      }
+      const blockEnd = block.startMinute + block.durationMinutes;
+      const conflict = next.scheduleBlocks.find((candidate) => (
+        candidate.id !== block.id
+        && candidate.locked
+        && block.locked
+        && candidate.date === block.date
+        && candidate.startMinute < blockEnd
+        && block.startMinute < candidate.startMinute + candidate.durationMinutes
+      ));
+      if (conflict) throw new Error('Schedule block conflicts with a locked block');
+      before = existing;
+      after = block;
+      next.scheduleBlocks = existing
+        ? next.scheduleBlocks.map((item) => (item.id === block.id ? block : item))
+        : [...next.scheduleBlocks, block];
+    } else if (command.type === 'deleteScheduleBlock') {
+      const blockId = normalizeOptionalText(commandValue(command, 'blockId') || commandValue(command, 'id'), 120);
+      const existing = next.scheduleBlocks.find((block) => block.id === blockId) || null;
+      if (!existing) throw new Error(`Schedule block not found: ${blockId}`);
+      taskId = existing.taskId;
+      before = existing;
+      after = null;
+      next.scheduleBlocks = next.scheduleBlocks.filter((block) => block.id !== blockId);
+    } else if (command.type === 'startFocus') {
+      const task = activeTaskById(next.tasks, taskId);
+      if (!task || task.status === 'completed') throw new Error(`Focusable task not found: ${taskId}`);
+      if (next.timeEntries.some((entry) => !entry.endedAt)) throw new Error('A focus session is already running');
+      const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120)
+        || makeId('time');
+      if (next.timeEntries.some((entry) => entry.id === entryId)) throw new Error(`Time entry already exists: ${entryId}`);
+      after = sanitizeTimeEntry({
+        id: entryId,
+        taskId: task.id,
+        startedAt: occurredAt,
+        endedAt: null,
+        durationSeconds: 0,
+        reportingDate: dateInTimeZone(occurredDate, next.meta.timeZone),
+        source: 'focus',
+      }, { timeZone: next.meta.timeZone });
+      next.timeEntries.push(after);
+    } else if (command.type === 'stopFocus') {
+      const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120);
+      const existing = next.timeEntries.find((entry) => !entry.endedAt && (!entryId || entry.id === entryId)) || null;
+      if (!existing) throw new Error('Running focus session not found');
+      taskId = existing.taskId;
+      before = existing;
+      after = sanitizeTimeEntry({
+        ...existing,
+        endedAt: occurredAt,
+        durationSeconds: Math.max(1, Math.round((occurredDate - new Date(existing.startedAt)) / 1000)),
+      }, { timeZone: next.meta.timeZone });
+      next.timeEntries = next.timeEntries.map((entry) => (entry.id === existing.id ? after : entry));
+    } else if (command.type === 'addManualTime') {
+      const task = activeTaskById(next.tasks, taskId);
+      if (!task) throw new Error(`Task not found: ${taskId}`);
+      const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120)
+        || makeId('time');
+      if (next.timeEntries.some((entry) => entry.id === entryId)) throw new Error(`Time entry already exists: ${entryId}`);
+      const date = normalizeDate(commandValue(command, 'date')) || dateInTimeZone(occurredDate, next.meta.timeZone);
+      const minutes = normalizeInteger(commandValue(command, 'minutes'), { min: 1, max: 1440, fallback: null });
+      if (minutes === null) throw new Error('Manual time must be between 1 and 1440 minutes');
+      after = sanitizeTimeEntry({
+        id: entryId,
+        taskId: task.id,
+        startedAt: occurredAt,
+        endedAt: occurredAt,
+        durationSeconds: minutes * 60,
+        reportingDate: date,
+        source: 'manual',
+        note: commandValue(command, 'note'),
+      }, { timeZone: next.meta.timeZone });
+      next.timeEntries.push(after);
+    } else if (command.type === 'deleteTimeEntry') {
+      const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120);
+      const existing = next.timeEntries.find((entry) => entry.id === entryId) || null;
+      if (!existing) throw new Error(`Time entry not found: ${entryId}`);
+      if (!existing.endedAt) throw new Error('Stop a running focus session before deleting it');
+      taskId = existing.taskId;
+      before = existing;
+      after = null;
+      next.timeEntries = next.timeEntries.filter((entry) => entry.id !== entryId);
     }
 
     assertTop3Limit(next.tasks);

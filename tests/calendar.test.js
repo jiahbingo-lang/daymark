@@ -216,11 +216,13 @@ test('month cells combine durable daily metrics with holiday labels without muta
     plannedCount: 2,
     completedCount: 1,
     completionRate: 50,
+    actualMinutes: 0,
   });
   assert.deepEqual(empty.metrics, {
     plannedCount: 0,
     completedCount: 0,
     completionRate: null,
+    actualMinutes: 0,
   });
   assert.deepEqual(source, before);
 });
@@ -283,7 +285,7 @@ test('calendar review hides deleted completions and recalculates archived metric
 
   const grid = buildMonthGrid({ year: 2026, month: 2, today: '2026-02-17', store: source });
   const cell = grid.cells.find((entry) => entry.date === '2026-02-16');
-  assert.deepEqual(cell.metrics, { plannedCount: 0, completedCount: 0, completionRate: null });
+  assert.deepEqual(cell.metrics, { plannedCount: 0, completedCount: 0, completionRate: null, actualMinutes: 0 });
 });
 
 test('calendar review syncs a corrected duration into the archived completion day', () => {
@@ -360,7 +362,7 @@ test('calendar withdraws an archived completion after the task is restored to To
   assert.deepEqual(detail.completed, []);
   assert.equal(detail.summary.completedCount, 0);
   assert.equal(detail.summary.completedMinutes, 0);
-  assert.deepEqual(cell.metrics, { plannedCount: 1, completedCount: 0, completionRate: 0 });
+  assert.deepEqual(cell.metrics, { plannedCount: 1, completedCount: 0, completionRate: 0, actualMinutes: 0 });
 });
 
 test('calendar withdraws an archived plan after the task is moved to Inbox', () => {
@@ -393,7 +395,7 @@ test('calendar withdraws an archived plan after the task is moved to Inbox', () 
   assert.deepEqual(detail.carried, []);
   assert.equal(detail.summary.plannedCount, 0);
   assert.equal(detail.summary.top3Count, 0);
-  assert.deepEqual(cell.metrics, { plannedCount: 0, completedCount: 0, completionRate: null });
+  assert.deepEqual(cell.metrics, { plannedCount: 0, completedCount: 0, completionRate: null, actualMinutes: 0 });
 });
 
 test('date detail builds the current day from live v2 events when no archive exists', () => {
@@ -434,8 +436,8 @@ test('calendar places a newly-created future task on its planned date, never tod
   assert.equal(today.summary.plannedCount, 0);
   assert.deepEqual(tomorrow.planned.map((item) => item.id), ['tomorrow']);
   assert.equal(tomorrow.summary.plannedCount, 1);
-  assert.deepEqual(todayCell.metrics, { plannedCount: 0, completedCount: 0, completionRate: null });
-  assert.deepEqual(tomorrowCell.metrics, { plannedCount: 1, completedCount: 0, completionRate: 0 });
+  assert.deepEqual(todayCell.metrics, { plannedCount: 0, completedCount: 0, completionRate: null, actualMinutes: 0 });
+  assert.deepEqual(tomorrowCell.metrics, { plannedCount: 1, completedCount: 0, completionRate: 0, actualMinutes: 0 });
 });
 
 test('calendar replaces an archived position when the current task is rescheduled', () => {
@@ -501,9 +503,34 @@ test('calendar features remain derived data and require no v2 schema migration',
   buildDateDetail(oldV2, '2026-07-15');
 
   assert.deepEqual(oldV2, before);
-  assert.equal(sanitized.version, 2);
+  assert.equal(sanitized.version, 3);
   assert.equal('holidays' in sanitized, false);
   assert.equal('calendar' in sanitized, false);
   assert.equal('ai' in sanitized, false);
   assert.equal('aiReports' in sanitized, false);
+});
+
+test('an actual-time-only day remains visible after the task is moved to Inbox', () => {
+  const inboxTask = task('timed-inbox', '临时支持', { plannedDate: null, area: '支持' });
+  const source = store({
+    tasks: [inboxTask],
+    timeEntries: [{
+      id: 'manual-time',
+      taskId: inboxTask.id,
+      reportingDate: '2026-07-16',
+      startedAt: '2026-07-16T08:00:00.000Z',
+      endedAt: '2026-07-16T08:00:00.000Z',
+      durationSeconds: 2700,
+      source: 'manual',
+    }],
+  });
+
+  const detail = buildDateDetail(source, '2026-07-16');
+  const grid = buildMonthGrid({ year: 2026, month: 7, store: source, today: '2026-07-17' });
+  const cell = grid.cells.find((entry) => entry.date === '2026-07-16');
+
+  assert.equal(detail.summary.plannedCount, 0);
+  assert.equal(detail.summary.actualMinutes, 45);
+  assert.equal(detail.actualTime[0].taskId, inboxTask.id);
+  assert.equal(cell.metrics.actualMinutes, 45);
 });
