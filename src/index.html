@@ -11,6 +11,68 @@
     <link rel="stylesheet" href="./styles.css?v=2" />
   </head>
   <body>
+    <svg class="tree-sprite" width="0" height="0" aria-hidden="true">
+      <defs>
+        <g id="tree-ground"><ellipse cx="60" cy="127" rx="30" ry="6" fill="#d5e2d5" /></g>
+        <g id="tree-seed">
+          <use href="#tree-ground" />
+          <path d="M44 127 Q60 116 76 127 Z" fill="#d9cfb8" />
+          <path d="M60 124 V112" stroke="#527a5e" stroke-width="3" stroke-linecap="round" fill="none" />
+          <path d="M60 114 C55 112 51 107 52 101 C58 103 61 108 60 114 Z" fill="#5d8467" />
+          <path d="M60 116 C65 114 69 109 68 103 C62 105 59 110 60 116 Z" fill="#476b52" />
+        </g>
+        <g id="tree-sprout">
+          <use href="#tree-ground" />
+          <path d="M60 126 V94" stroke="#527a5e" stroke-width="3.5" stroke-linecap="round" fill="none" />
+          <path d="M60 104 C53 102 48 95 49 88 C57 90 61 97 60 104 Z" fill="#5d8467" />
+          <path d="M60 106 C67 104 72 97 71 90 C63 92 59 99 60 106 Z" fill="#476b52" />
+          <path d="M60 118 C54 116 50 111 51 105 C58 107 61 112 60 118 Z" fill="#476b52" />
+          <path d="M60 120 C66 118 70 113 69 107 C62 109 59 114 60 120 Z" fill="#5d8467" />
+        </g>
+        <g id="tree-sapling">
+          <use href="#tree-ground" />
+          <path d="M60 126 V86" stroke="#7d5f46" stroke-width="5" stroke-linecap="round" fill="none" />
+          <circle cx="60" cy="70" r="21" fill="#5d8467" />
+          <circle cx="67" cy="77" r="12" fill="#476b52" opacity="0.75" />
+          <circle cx="52" cy="63" r="9" fill="#79a184" opacity="0.8" />
+        </g>
+        <g id="tree-young">
+          <use href="#tree-ground" />
+          <path d="M60 126 V72" stroke="#7d5f46" stroke-width="5" stroke-linecap="round" fill="none" />
+          <path d="M60 92 L48 80" stroke="#7d5f46" stroke-width="4" stroke-linecap="round" fill="none" />
+          <circle cx="47" cy="64" r="15" fill="#476b52" />
+          <circle cx="71" cy="60" r="17" fill="#5d8467" />
+          <circle cx="58" cy="47" r="15" fill="#5d8467" />
+          <circle cx="63" cy="42" r="6" fill="#79a184" opacity="0.85" />
+        </g>
+        <g id="tree-mature">
+          <use href="#tree-ground" />
+          <path d="M60 126 V64" stroke="#7d5f46" stroke-width="5.5" stroke-linecap="round" fill="none" />
+          <path d="M60 88 L45 74" stroke="#7d5f46" stroke-width="4.5" stroke-linecap="round" fill="none" />
+          <path d="M60 78 L75 66" stroke="#7d5f46" stroke-width="4.5" stroke-linecap="round" fill="none" />
+          <ellipse cx="60" cy="52" rx="27" ry="21" fill="#5d8467" />
+          <circle cx="42" cy="56" r="17" fill="#476b52" />
+          <circle cx="78" cy="54" r="18" fill="#5d8467" />
+          <circle cx="60" cy="35" r="19" fill="#547e60" />
+          <circle cx="67" cy="29" r="7" fill="#79a184" opacity="0.9" />
+        </g>
+        <g id="tree-bloom">
+          <use href="#tree-mature" />
+          <circle cx="48" cy="44" r="2.6" fill="#eee0b0" />
+          <circle cx="70" cy="38" r="2.6" fill="#eee0b0" />
+          <circle cx="58" cy="58" r="2.6" fill="#eee0b0" />
+          <circle cx="80" cy="60" r="2.4" fill="#eee0b0" />
+        </g>
+        <g id="tree-withered">
+          <use href="#tree-ground" />
+          <path d="M60 126 V78" stroke="#8d857a" stroke-width="5" stroke-linecap="round" fill="none" />
+          <path d="M60 84 C52 78 46 80 42 88" stroke="#a49a8c" stroke-width="3" stroke-linecap="round" fill="none" />
+          <path d="M60 92 C68 88 73 90 76 97" stroke="#a49a8c" stroke-width="3" stroke-linecap="round" fill="none" />
+          <path d="M60 102 C54 100 49 104 47 110" stroke="#a49a8c" stroke-width="3" stroke-linecap="round" fill="none" />
+          <circle cx="46" cy="118" r="2.2" fill="#b7ad9e" />
+        </g>
+      </defs>
+    </svg>
     <div class="app-shell">
       <aside class="sidebar" aria-label="任务视图">
         <div class="window-drag-region" aria-hidden="true"></div>
@@ -61,7 +123,14 @@
         </nav>
 
         <div class="nav-divider"></div>
-        <nav class="nav-list" aria-label="工作回顾">
+        <nav class="nav-list" aria-label="专注与回顾">
+          <button class="nav-item" type="button" data-view="focus">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 21v-6" /><path d="M12 15c-3.5 0-6-2.4-6-5.5C6 6.4 8.5 3 12 3s6 3.4 6 6.5c0 3.1-2.5 5.5-6 5.5z" /></svg>
+            </span>
+            <span>专注</span>
+            <span class="nav-count" id="focus-nav-count">0</span>
+          </button>
           <button class="nav-item" type="button" data-view="review">
             <span class="nav-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M5 19V9M10 19V5M15 19v-7M20 19V3" /></svg>
@@ -86,6 +155,11 @@
             <h1 id="view-title">收件箱</h1>
             <p id="view-summary">0 件待安排</p>
           </div>
+          <button class="focus-chip" id="focus-chip" type="button" hidden aria-label="回到专注视图">
+            <span class="focus-chip-pulse" aria-hidden="true"></span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21v-6" /><path d="M12 15c-3.5 0-6-2.4-6-5.5C6 6.4 8.5 3 12 3s6 3.4 6 6.5c0 3.1-2.5 5.5-6 5.5z" /></svg>
+            <span id="focus-chip-time">--:--</span>
+          </button>
           <label class="search-box" id="search-box" for="search-input">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg>
             <input id="search-input" type="search" aria-label="搜索任务" placeholder="搜索任务" autocomplete="off" />
@@ -155,6 +229,74 @@
             <h2 id="empty-title">收件箱已经清空</h2>
             <p id="empty-copy">想到的新任务会先放在这里。</p>
             <button id="empty-action" class="secondary-button" type="button">添加任务</button>
+          </div>
+        </section>
+
+        <section class="focus-workspace" id="focus-workspace" hidden aria-label="专注计时">
+          <div class="focus-stage">
+            <span class="focus-kicker">DAYMARK · FOCUS</span>
+            <div class="focus-plate-wrap">
+              <svg class="focus-ring" viewBox="0 0 216 216" aria-hidden="true">
+                <circle class="focus-ring-track" cx="108" cy="108" r="100" />
+                <circle class="focus-ring-progress" id="focus-ring-progress" cx="108" cy="108" r="100" transform="rotate(-90 108 108)" stroke-dasharray="628.3" stroke-dashoffset="628.3" />
+              </svg>
+              <div class="focus-plate">
+                <svg class="focus-tree" viewBox="0 0 120 140" aria-hidden="true">
+                  <g data-stage="seed" class="is-on"><use href="#tree-seed" /></g>
+                  <g data-stage="sprout"><use href="#tree-sprout" /></g>
+                  <g data-stage="sapling"><use href="#tree-sapling" /></g>
+                  <g data-stage="young"><use href="#tree-young" /></g>
+                  <g data-stage="mature"><use href="#tree-mature" /></g>
+                  <g data-stage="bloom"><use href="#tree-bloom" /></g>
+                  <g data-stage="withered"><use href="#tree-withered" /></g>
+                </svg>
+              </div>
+            </div>
+            <p class="focus-clock" id="focus-clock">25:00</p>
+            <p class="focus-state-line" id="focus-state-line">选好时长，种下一棵树</p>
+
+            <div class="focus-phase" id="focus-phase-idle">
+              <div class="focus-duration-chips" id="focus-duration-chips" role="group" aria-label="专注时长">
+                <button type="button" data-minutes="15" aria-pressed="false">15 分钟</button>
+                <button type="button" data-minutes="25" aria-pressed="true">25 分钟</button>
+                <button type="button" data-minutes="45" aria-pressed="false">45 分钟</button>
+                <button type="button" data-minutes="60" aria-pressed="false">60 分钟</button>
+                <button type="button" data-minutes="90" aria-pressed="false">90 分钟</button>
+              </div>
+              <div class="focus-task-row">
+                <select id="focus-task-select" aria-label="关联任务">
+                  <option value="">自由专注（不关联任务）</option>
+                </select>
+                <button class="focus-start-button" id="focus-start" type="button">开始专注</button>
+              </div>
+            </div>
+
+            <div class="focus-phase" id="focus-phase-running" hidden>
+              <div class="focus-action-row">
+                <button class="focus-pause-button" id="focus-pause" type="button" hidden>暂停</button>
+                <button class="focus-giveup-button" id="focus-giveup" type="button">放弃</button>
+              </div>
+              <div class="focus-confirm" id="focus-confirm" hidden>
+                <span>现在放弃，这棵树会枯萎，这段时间不会计入统计。</span>
+                <button class="focus-confirm-yes" id="focus-confirm-yes" type="button">放弃</button>
+                <button class="focus-confirm-no" id="focus-confirm-no" type="button">继续专注</button>
+              </div>
+            </div>
+
+            <div class="focus-phase" id="focus-phase-done" hidden>
+              <div class="focus-action-row">
+                <button class="focus-start-button" id="focus-again" type="button">再种一棵</button>
+                <button class="focus-rest-button" id="focus-rest" type="button">休息一下</button>
+              </div>
+            </div>
+
+            <div class="focus-phase" id="focus-phase-withered" hidden>
+              <div class="focus-action-row">
+                <button class="focus-start-button" id="focus-retry" type="button">重新开始</button>
+              </div>
+            </div>
+
+            <p class="focus-note">完成时会收到系统通知 · 中途退出应用视为放弃</p>
           </div>
         </section>
 
@@ -409,6 +551,48 @@
           </button>
         </form>
       </aside>
+
+      <aside class="focus-panel" id="focus-panel" hidden aria-label="今日专注统计">
+        <div class="focus-panel-block">
+          <h3>今日专注</h3>
+          <div class="focus-big-number"><span id="focus-today-minutes">0</span><small>分钟</small></div>
+          <p class="focus-sub-line" id="focus-today-sub">还没有种下树</p>
+          <div class="focus-goal-track" aria-hidden="true"><span id="focus-goal-fill"></span></div>
+          <div class="focus-goal-caption"><span>每日目标</span><span id="focus-goal-caption">0 / 120 分钟</span></div>
+        </div>
+
+        <div class="focus-panel-block">
+          <h3>今日森林</h3>
+          <div class="focus-grove" id="focus-grove" role="list" aria-label="今天种下的树"></div>
+        </div>
+
+        <div class="focus-panel-block">
+          <h3>近 7 天</h3>
+          <div class="focus-bars" id="focus-bars" aria-hidden="true"></div>
+          <div class="focus-bar-labels" id="focus-bar-labels" aria-hidden="true"></div>
+          <p class="focus-week-total">近 7 天合计 <strong id="focus-week-total">0</strong> 分钟</p>
+        </div>
+
+        <div class="focus-panel-block focus-settings">
+          <h3>专注设置</h3>
+          <label class="focus-setting-row">
+            <input type="checkbox" id="focus-strict-mode" checked />
+            <span>严格模式<small>专注中不能暂停，放弃即枯萎</small></span>
+          </label>
+          <label class="focus-setting-row">
+            <input type="checkbox" id="focus-notification" checked />
+            <span>完成时系统通知<small>与任务提醒使用同一通知通道</small></span>
+          </label>
+          <label class="focus-setting-row focus-goal-row">每日目标
+            <select id="focus-goal-select">
+              <option value="60">60 分钟</option>
+              <option value="120">120 分钟</option>
+              <option value="180">180 分钟</option>
+              <option value="240">240 分钟</option>
+            </select>
+          </label>
+        </div>
+      </aside>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite" hidden>
@@ -418,6 +602,7 @@
 
     <pre id="app-debug-state" hidden aria-hidden="true"></pre>
     <script src="./domain.js"></script>
+    <script src="./focus.js"></script>
     <script src="./planning.js"></script>
     <script src="./reporting.js"></script>
     <script src="./calendar.js"></script>

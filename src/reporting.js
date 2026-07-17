@@ -9,6 +9,12 @@
     throw new Error('DaymarkPlanning is required before DaymarkReporting');
   }
 
+  function focusApi() {
+    if (global.DaymarkFocus) return global.DaymarkFocus;
+    if (typeof require === 'function') return require('./focus');
+    throw new Error('DaymarkFocus is required before DaymarkReporting');
+  }
+
   function clone(value) {
     if (Array.isArray(value)) return value.map(clone);
     if (value && typeof value === 'object') {
@@ -851,6 +857,11 @@
       .map((record) => ({ date: record.date, note: String(record.dailyNotes).trim() }));
 
     const title = quarter === null ? `${year} 年度工作总结` : `${year} 年第 ${quarter} 季度工作总结`;
+    const focus = focusApi().rangeFocusStats(
+      store?.focusSessions,
+      startDate,
+      effectiveEnd >= startDate ? effectiveEnd : startDate,
+    );
     return {
       type: quarter === null ? 'year' : 'quarter',
       title,
@@ -858,6 +869,7 @@
       quarter,
       period: { startDate, endDate, throughDate: effectiveEnd },
       totals,
+      focus,
       top3: {
         planned: top3PlannedIds.size,
         completed: top3CompletedIds.size,
@@ -925,6 +937,19 @@
     );
     if (report.top3?.items?.length) lines.push(...report.top3.items.map(taskLine));
     else lines.push('- 暂无完成记录');
+
+    const focus = report.focus;
+    if (focus && (focus.completedCount || focus.abandonedCount)) {
+      lines.push(
+        '',
+        '## 专注统计',
+        '',
+        `- 专注总时长：${focus.totalMinutes} 分钟（${focus.completedCount} 次完成）`,
+        `- 专注天数：${focus.activeDays} 天，日均 ${focus.dailyAverage} 分钟`,
+      );
+      if (focus.bestDay) lines.push(`- 最佳专注日：${focus.bestDay.date}（${focus.bestDay.minutes} 分钟）`);
+      if (focus.abandonedCount) lines.push(`- 中断 ${focus.abandonedCount} 次（未计入时长）`);
+    }
 
     lines.push(
       '',

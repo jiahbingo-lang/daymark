@@ -29,11 +29,11 @@ function legacyStore(title) {
   };
 }
 
-test('a first launch returns an empty v2 store', async (t) => {
+test('a first launch returns an empty v3 store', async (t) => {
   const context = await fixture();
   t.after(context.cleanup);
   const result = await context.store.load();
-  assert.equal(result.version, 2);
+  assert.equal(result.version, 3);
   assert.deepEqual(result.tasks, []);
   assert.deepEqual(result.events, []);
   assert.deepEqual(result.dailyArchives, []);
@@ -49,7 +49,7 @@ test('v1 is migrated once, permanently backed up, and Chinese content survives',
   await fs.writeFile(context.filePath, JSON.stringify(payload), 'utf8');
 
   const migrated = await context.store.load();
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, 3);
   assert.equal(migrated.tasks[0].title, '完成桌面版 ✅');
   assert.equal(migrated.tasks[0].notes, '仅保存在本机');
   assert.equal(migrated.events[0].type, 'baseline_imported');
@@ -57,7 +57,7 @@ test('v1 is migrated once, permanently backed up, and Chinese content survives',
   const permanent = JSON.parse(await fs.readFile(`${context.filePath}.v1-backup.json`, 'utf8'));
   assert.equal(permanent.version, 1);
   assert.equal(permanent.tasks[0].title, '完成桌面版 ✅');
-  assert.equal(JSON.parse(await fs.readFile(context.filePath, 'utf8')).version, 2);
+  assert.equal(JSON.parse(await fs.readFile(context.filePath, 'utf8')).version, 3);
   assert.equal((await fs.stat(context.filePath)).mode & 0o777, 0o600);
 });
 

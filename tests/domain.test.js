@@ -208,7 +208,7 @@ test('v1 migration is idempotent and future versions fail closed', () => {
   assert.equal(migrated.tasks[0].dueDate, '2026-07-20');
   assert.equal(migrated.events[0].eventId.startsWith('v1-baseline-1-'), true);
   assert.deepEqual(migrated.dailyArchives, []);
-  assert.throws(() => sanitizeStore({ version: 3, tasks: [] }), /Unsupported store version/);
+  assert.throws(() => sanitizeStore({ version: 4, tasks: [] }), /Unsupported store version/);
 });
 
 test('task v2 fields are sanitized and preserved in browser-safe data', () => {
@@ -457,7 +457,7 @@ test('the domain bundle exposes the same API directly in a browser context', () 
   const context = vm.createContext({ window: {} });
   vm.runInContext(source, context);
 
-  assert.equal(context.window.TodoDomain.STORE_VERSION, 2);
+  assert.equal(context.window.TodoDomain.STORE_VERSION, 3);
   assert.equal(typeof context.window.TodoDomain.applyCommand, 'function');
   assert.equal(context.window.TodoDomain.createTask('浏览器任务', { id: 'browser-task' }).title, '浏览器任务');
 });

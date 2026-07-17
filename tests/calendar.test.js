@@ -501,7 +501,7 @@ test('calendar features remain derived data and require no v2 schema migration',
   buildDateDetail(oldV2, '2026-07-15');
 
   assert.deepEqual(oldV2, before);
-  assert.equal(sanitized.version, 2);
+  assert.equal(sanitized.version, 3);
   assert.equal('holidays' in sanitized, false);
   assert.equal('calendar' in sanitized, false);
   assert.equal('ai' in sanitized, false);

@@ -1,7 +1,16 @@
 (function exposeDomain(global) {
-  const STORE_VERSION = 2;
+  const STORE_VERSION = 3;
   const PRIORITIES = ['none', 'low', 'medium', 'high'];
   const VIEWS = ['all', 'inbox', 'today', 'upcoming', 'completed'];
+  const FOCUS_SESSION_STATUSES = ['running', 'completed', 'abandoned'];
+  const FOCUS_MIN_MINUTES = 5;
+  const FOCUS_MAX_MINUTES = 180;
+  const DEFAULT_FOCUS_SETTINGS = Object.freeze({
+    defaultMinutes: 25,
+    strictMode: true,
+    completionNotification: true,
+    dailyGoalMinutes: 120,
+  });
   const TASK_PATCH_FIELDS = [
     'title',
     'notes',
@@ -209,6 +218,78 @@
     return result;
   }
 
+  function sanitizeFocusSettings(input) {
+    const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+    return {
+      defaultMinutes: normalizeInteger(source.defaultMinutes, {
+        min: FOCUS_MIN_MINUTES,
+        max: FOCUS_MAX_MINUTES,
+        fallback: DEFAULT_FOCUS_SETTINGS.defaultMinutes,
+      }),
+      strictMode: source.strictMode !== false,
+      completionNotification: source.completionNotification !== false,
+      dailyGoalMinutes: normalizeInteger(source.dailyGoalMinutes, {
+        min: 0,
+        max: 1440,
+        fallback: DEFAULT_FOCUS_SETTINGS.dailyGoalMinutes,
+      }),
+    };
+  }
+
+  function sanitizeFocusSession(input) {
+    if (!input || typeof input !== 'object') return null;
+    const id = normalizeOptionalText(input.id, 120);
+    const startedAt = normalizeIso(input.startedAt, null);
+    const reportingDate = normalizeDate(input.reportingDate);
+    const plannedMinutes = normalizeInteger(input.plannedMinutes, {
+      min: FOCUS_MIN_MINUTES,
+      max: FOCUS_MAX_MINUTES,
+      fallback: null,
+    });
+    const status = FOCUS_SESSION_STATUSES.includes(input.status) ? input.status : null;
+    if (!id || !startedAt || !reportingDate || !plannedMinutes || !status) return null;
+    const running = status === 'running';
+    return {
+      id,
+      taskId: normalizeOptionalText(input.taskId, 120),
+      plannedMinutes,
+      startedAt,
+      endedAt: running ? null : normalizeIso(input.endedAt, startedAt),
+      status,
+      focusedMinutes: running
+        ? 0
+        : normalizeInteger(input.focusedMinutes, { min: 0, max: plannedMinutes, fallback: 0 }),
+      pausedAt: running ? normalizeIso(input.pausedAt, null) : null,
+      pausedMs: normalizeInteger(input.pausedMs, { min: 0, max: 86_400_000, fallback: 0 }),
+      reportingDate,
+    };
+  }
+
+  function sanitizeFocusSessions(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    return value
+      .map(sanitizeFocusSession)
+      .filter((session) => {
+        if (!session || seen.has(session.id)) return false;
+        seen.add(session.id);
+        return true;
+      })
+      .sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
+  }
+
+  function focusSessionEnd(session) {
+    const started = new Date(session.startedAt).getTime();
+    return started + session.plannedMinutes * 60_000 + (Number(session.pausedMs) || 0);
+  }
+
+  function elapsedFocusMinutes(session, at) {
+    const started = new Date(session.startedAt).getTime();
+    const reference = session.pausedAt ? new Date(session.pausedAt).getTime() : toDate(at).getTime();
+    const activeMs = reference - started - (Number(session.pausedMs) || 0);
+    return Math.max(0, Math.min(session.plannedMinutes, Math.floor(activeMs / 60_000)));
+  }
+
   function sanitizeEvent(input) {
     if (!input || typeof input !== 'object') return null;
     const eventId = normalizeOptionalText(input.eventId, 180);
@@ -268,10 +349,12 @@
         endOfDayReminderTime: DEFAULT_END_OF_DAY_REMINDER_TIME,
         endOfDayReminderLastDate: null,
         dailyNotes: {},
+        focusSettings: sanitizeFocusSettings(null),
       },
       tasks,
       events,
       dailyArchives: [],
+      focusSessions: [],
     };
   }
 
@@ -310,20 +393,24 @@
         endOfDayReminderTime: normalizeClockTime(metaInput.endOfDayReminderTime),
         endOfDayReminderLastDate: normalizeDate(metaInput.endOfDayReminderLastDate),
         dailyNotes: sanitizeDailyNotes(metaInput.dailyNotes),
+        focusSettings: sanitizeFocusSettings(metaInput.focusSettings),
       },
       tasks,
       events,
       dailyArchives: sanitizeArchives(input?.dailyArchives),
+      focusSessions: sanitizeFocusSessions(input?.focusSessions),
     };
   }
 
   function sanitizeStore(input, options = {}) {
     const rawVersion = input?.version;
     const version = rawVersion === undefined || rawVersion === null ? 1 : Number(rawVersion);
-    if (!Number.isInteger(version) || ![1, STORE_VERSION].includes(version)) {
+    // Version 3 added focus sessions on top of the v2 event-sourced shape, so
+    // the same sanitizer upgrades v2 files by filling focus defaults.
+    if (!Number.isInteger(version) || ![1, 2, STORE_VERSION].includes(version)) {
       throw new Error(`Unsupported store version: ${rawVersion}`);
     }
-    if (version === STORE_VERSION) return sanitizeV2(input, options);
+    if (version >= 2) return sanitizeV2(input, options);
     return migrateV1(input, options);
   }
 
@@ -545,6 +632,12 @@
       'setCapacity',
       'setEndOfDayReminder',
       'markEndOfDayReminderFired',
+      'startFocusSession',
+      'pauseFocusSession',
+      'resumeFocusSession',
+      'completeFocusSession',
+      'abandonFocusSession',
+      'setFocusSettings',
     ];
     if (!supported.includes(command.type)) throw new Error(`Unsupported command: ${command.type}`);
 
@@ -561,6 +654,7 @@
       tasks: [...store.tasks],
       events: [...store.events],
       dailyArchives: [...store.dailyArchives],
+      focusSessions: [...store.focusSessions],
     };
     let taskId = normalizeOptionalText(command.taskId || commandValue(command, 'id'), 120);
     let before = null;
@@ -675,6 +769,99 @@
       next.meta.endOfDayReminderLastDate = date;
       after = { date };
       taskId = null;
+    } else if (command.type === 'startFocusSession') {
+      const plannedMinutes = normalizeInteger(commandValue(command, 'plannedMinutes'), {
+        min: 0,
+        max: Number.MAX_SAFE_INTEGER,
+        fallback: null,
+      });
+      if (
+        plannedMinutes === null ||
+        plannedMinutes < FOCUS_MIN_MINUTES ||
+        plannedMinutes > FOCUS_MAX_MINUTES
+      ) {
+        throw new Error(`Focus session length must be ${FOCUS_MIN_MINUTES}-${FOCUS_MAX_MINUTES} minutes`);
+      }
+      if (next.focusSessions.some((session) => session.status === 'running')) {
+        throw new Error('A focus session is already running');
+      }
+      const linkedTaskId = normalizeOptionalText(commandValue(command, 'taskId'), 120);
+      if (linkedTaskId && !activeTaskById(next.tasks, linkedTaskId)) {
+        throw new Error(`Task not found: ${linkedTaskId}`);
+      }
+      const sessionId = normalizeOptionalText(commandValue(command, 'sessionId'), 120) || makeId('focus');
+      if (next.focusSessions.some((session) => session.id === sessionId)) {
+        throw new Error(`Focus session already exists: ${sessionId}`);
+      }
+      const session = sanitizeFocusSession({
+        id: sessionId,
+        taskId: linkedTaskId,
+        plannedMinutes,
+        startedAt: occurredAt,
+        status: 'running',
+        reportingDate:
+          normalizeDate(command.reportingDate) || dateInTimeZone(occurredDate, next.meta.timeZone),
+      });
+      if (!session) throw new Error('Unable to create focus session');
+      next.focusSessions.push(session);
+      after = session;
+      taskId = linkedTaskId;
+    } else if (
+      ['pauseFocusSession', 'resumeFocusSession', 'completeFocusSession', 'abandonFocusSession'].includes(command.type)
+    ) {
+      const sessionId = normalizeOptionalText(commandValue(command, 'sessionId'), 120);
+      const session = next.focusSessions.find((candidate) => candidate.id === sessionId);
+      if (!session) throw new Error(`Focus session not found: ${sessionId}`);
+      if (session.status !== 'running') throw new Error(`Focus session is not running: ${sessionId}`);
+      before = session;
+      let updated;
+      if (command.type === 'pauseFocusSession') {
+        if (next.meta.focusSettings.strictMode) throw new Error('Strict mode forbids pausing a focus session');
+        if (session.pausedAt) throw new Error('Focus session is already paused');
+        updated = { ...session, pausedAt: occurredAt };
+      } else if (command.type === 'resumeFocusSession') {
+        if (!session.pausedAt) throw new Error('Focus session is not paused');
+        const pausedSpan = Math.max(0, occurredDate.getTime() - new Date(session.pausedAt).getTime());
+        updated = { ...session, pausedAt: null, pausedMs: (Number(session.pausedMs) || 0) + pausedSpan };
+      } else if (command.type === 'completeFocusSession') {
+        updated = {
+          ...session,
+          status: 'completed',
+          endedAt: occurredAt,
+          pausedAt: null,
+          focusedMinutes: session.plannedMinutes,
+        };
+      } else {
+        // Abandoning withers the tree. The session keeps its real focused
+        // minutes for the record, but focus statistics only ever count
+        // completed sessions (Forest-style loss aversion).
+        const suppliedMinutes = normalizeInteger(commandValue(command, 'focusedMinutes'), {
+          min: 0,
+          max: session.plannedMinutes,
+          fallback: null,
+        });
+        updated = {
+          ...session,
+          status: 'abandoned',
+          endedAt: occurredAt,
+          pausedAt: null,
+          focusedMinutes: suppliedMinutes ?? elapsedFocusMinutes(session, occurredDate),
+        };
+      }
+      const safeSession = sanitizeFocusSession(updated);
+      if (!safeSession) throw new Error('Unable to update focus session');
+      next.focusSessions = next.focusSessions.map((candidate) => (candidate.id === session.id ? safeSession : candidate));
+      after = safeSession;
+      taskId = session.taskId;
+    } else if (command.type === 'setFocusSettings') {
+      const payload = commandPayload(command);
+      const known = ['defaultMinutes', 'strictMode', 'completionNotification', 'dailyGoalMinutes'];
+      const requested = known.filter((field) => Object.prototype.hasOwnProperty.call(payload, field));
+      if (!requested.length) throw new Error('setFocusSettings requires at least one focus setting');
+      before = { ...next.meta.focusSettings };
+      next.meta.focusSettings = sanitizeFocusSettings({ ...next.meta.focusSettings, ...payload });
+      after = { ...next.meta.focusSettings };
+      taskId = null;
     }
 
     assertTop3Limit(next.tasks);
@@ -713,6 +900,9 @@
     STORE_VERSION,
     PRIORITIES,
     VIEWS,
+    FOCUS_MIN_MINUTES,
+    FOCUS_MAX_MINUTES,
+    DEFAULT_FOCUS_SETTINGS,
     localDate,
     dateInTimeZone,
     normalizeTitle,
@@ -729,6 +919,8 @@
     applyCommand,
     inverseTaskPatch,
     nextRecurringDate,
+    focusSessionEnd,
+    elapsedFocusMinutes,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

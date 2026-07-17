@@ -1,7 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomBytes } = require('node:crypto');
-const { sanitizeStore, applyCommand, dateInTimeZone } = require('./domain');
+const { STORE_VERSION, sanitizeStore, applyCommand, dateInTimeZone } = require('./domain');
 
 const MAX_STORE_BYTES = 64 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024;
@@ -35,7 +35,8 @@ function createTodoStore(filePath, options = {}) {
   }
 
   function migrateTimeZone(raw) {
-    if (!forceTimeZone || Number(raw?.version) !== 2 || raw?.meta?.timeZone === timeZone) {
+    const eventSourced = Number(raw?.version) >= 2;
+    if (!forceTimeZone || !eventSourced || raw?.meta?.timeZone === timeZone) {
       return { value: raw, migrated: false };
     }
     const events = (Array.isArray(raw?.events) ? raw.events : []).map((event) => {
@@ -135,7 +136,7 @@ function createTodoStore(filePath, options = {}) {
   async function loadCandidate(target, { persistMigration = false } = {}) {
     const raw = await readRaw(target);
     const rawVersion = Number(raw?.version ?? 1);
-    if (rawVersion > 2) throw new Error(`Unsupported store version: ${raw.version}`);
+    if (rawVersion > STORE_VERSION) throw new Error(`Unsupported store version: ${raw.version}`);
     if (persistMigration && rawVersion === 1) await preserveV1(raw);
     const timeZoneMigration = migrateTimeZone(raw);
     const safe = sanitize(timeZoneMigration.value);

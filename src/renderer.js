@@ -8,12 +8,14 @@ const {
   counts,
   inverseTaskPatch,
   nextRecurringDate,
+  focusSessionEnd,
 } = window.TodoDomain;
 
 const Reporting = window.DaymarkReporting;
 const Calendar = window.DaymarkCalendar;
 const Planning = window.DaymarkPlanning;
 const AiReport = window.DaymarkAiReport;
+const Focus = window.DaymarkFocus;
 const DAYMARK_TIME_ZONE = 'Asia/Shanghai';
 
 function commandId(prefix = 'event') {
@@ -143,6 +145,13 @@ const VIEW_COPY = {
     emptyTitle: '',
     emptyCopy: '',
   },
+  focus: {
+    title: '专注',
+    listLabel: '',
+    hint: '',
+    emptyTitle: '',
+    emptyCopy: '',
+  },
 };
 
 const PRIORITY_LABELS = {
@@ -177,6 +186,8 @@ const state = {
   },
   aiRequestId: null,
   aiReportText: '',
+  focusMinutes: null,
+  focusOutcome: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -276,6 +287,41 @@ const elements = {
   toastMessage: $('#toast-message'),
   undoButton: $('#undo-button'),
   debugState: $('#app-debug-state'),
+  focusNavCount: $('#focus-nav-count'),
+  focusChip: $('#focus-chip'),
+  focusChipTime: $('#focus-chip-time'),
+  focusWorkspace: $('#focus-workspace'),
+  focusPanel: $('#focus-panel'),
+  focusRingProgress: $('#focus-ring-progress'),
+  focusTree: $('.focus-tree'),
+  focusClock: $('#focus-clock'),
+  focusStateLine: $('#focus-state-line'),
+  focusPhaseIdle: $('#focus-phase-idle'),
+  focusPhaseRunning: $('#focus-phase-running'),
+  focusPhaseDone: $('#focus-phase-done'),
+  focusPhaseWithered: $('#focus-phase-withered'),
+  focusDurationChips: $('#focus-duration-chips'),
+  focusTaskSelect: $('#focus-task-select'),
+  focusStart: $('#focus-start'),
+  focusPause: $('#focus-pause'),
+  focusGiveup: $('#focus-giveup'),
+  focusConfirm: $('#focus-confirm'),
+  focusConfirmYes: $('#focus-confirm-yes'),
+  focusConfirmNo: $('#focus-confirm-no'),
+  focusAgain: $('#focus-again'),
+  focusRest: $('#focus-rest'),
+  focusRetry: $('#focus-retry'),
+  focusTodayMinutes: $('#focus-today-minutes'),
+  focusTodaySub: $('#focus-today-sub'),
+  focusGoalFill: $('#focus-goal-fill'),
+  focusGoalCaption: $('#focus-goal-caption'),
+  focusGrove: $('#focus-grove'),
+  focusBars: $('#focus-bars'),
+  focusBarLabels: $('#focus-bar-labels'),
+  focusWeekTotal: $('#focus-week-total'),
+  focusStrictMode: $('#focus-strict-mode'),
+  focusNotification: $('#focus-notification'),
+  focusGoalSelect: $('#focus-goal-select'),
 };
 
 let commandChain = Promise.resolve();
@@ -289,6 +335,20 @@ const detailsOverlayQuery = window.matchMedia('(max-width: 1030px)');
 
 function activeTasks() {
   return state.store?.tasks || [];
+}
+
+function focusSessions() {
+  return state.store?.focusSessions || [];
+}
+
+function focusSettings() {
+  return state.store?.meta?.focusSettings || {
+    defaultMinutes: 25, strictMode: true, completionNotification: true, dailyGoalMinutes: 120,
+  };
+}
+
+function runningFocusSession() {
+  return Focus.runningSession(focusSessions());
 }
 
 function selectedTask() {
@@ -486,11 +546,17 @@ function renderSidebar() {
 
 function renderHeader() {
   const copy = VIEW_COPY[state.view];
-  const count = state.view === 'review' ? 0 : visibleTasks(activeTasks(), state.view, '', todayDate()).length;
+  const chromeless = state.view === 'review' || state.view === 'focus';
+  const count = chromeless ? 0 : visibleTasks(activeTasks(), state.view, '', todayDate()).length;
   elements.dateLabel.textContent = formatHeaderDate();
   elements.viewTitle.textContent = copy.title;
-  elements.searchBox.hidden = state.view === 'review';
-  if (state.view === 'review') {
+  elements.searchBox.hidden = chromeless;
+  if (state.view === 'focus') {
+    const summary = Focus.dailyFocusSummary(focusSessions(), todayDate());
+    elements.viewSummary.textContent = summary.completedCount || summary.abandonedCount
+      ? `今日已专注 ${summary.minutes} 分钟 · 种下 ${summary.completedCount} 棵树`
+      : '选一段时间，专心种一棵树';
+  } else if (state.view === 'review') {
     elements.viewSummary.textContent = '每日记录自动沉淀，报告默认在本机生成';
   } else if (state.view === 'completed') {
     elements.viewSummary.textContent = `${count} 件已完成`;
@@ -580,7 +646,22 @@ function buildTaskRow(task) {
   remove.setAttribute('aria-label', `删除“${task.title}”`);
   remove.appendChild(trashIcon());
 
-  row.append(checkbox, main, flag, priorityMark, remove);
+  row.append(checkbox, main);
+  if (state.view === 'today' && task.status === 'active' && !runningFocusSession()) {
+    row.classList.add('has-focus-action');
+    const focusGo = document.createElement('button');
+    focusGo.type = 'button';
+    focusGo.className = 'focus-go-action';
+    focusGo.dataset.action = 'focus';
+    focusGo.setAttribute('aria-label', `为“${task.title}”开始专注`);
+    focusGo.appendChild(createSvg([
+      { attrs: { d: 'M12 21v-6' } },
+      { attrs: { d: 'M12 15c-3.5 0-6-2.4-6-5.5C6 6.4 8.5 3 12 3s6 3.4 6 6.5c0 3.1-2.5 5.5-6 5.5z' } },
+    ]));
+    focusGo.append('专注');
+    row.appendChild(focusGo);
+  }
+  row.append(flag, priorityMark, remove);
   return row;
 }
 
@@ -650,7 +731,7 @@ function renderAreaSuggestions() {
 }
 
 function renderDetails() {
-  const task = state.view === 'review' ? null : selectedTask();
+  const task = state.view === 'review' || state.view === 'focus' ? null : selectedTask();
   const isolateBackground = Boolean(task && detailsOverlayQuery.matches);
   document.querySelector('.sidebar').inert = isolateBackground;
   document.querySelector('.main-content').inert = isolateBackground;
@@ -739,6 +820,18 @@ function buildMonthMarkdown(source, title) {
   const achievements = source.achievements
     .filter((item, index, all) => all.findIndex((candidate) => `${candidate.date}:${candidate.title}` === `${item.date}:${item.title}`) === index)
     .slice(0, 12);
+  const focusStats = Focus.rangeFocusStats(focusSessions(), source.period.startDate, source.period.throughDate);
+  const focusLines = focusStats.completedCount || focusStats.abandonedCount
+    ? [
+        '## 专注统计',
+        '',
+        `- 专注总时长：${focusStats.totalMinutes} 分钟（${focusStats.completedCount} 次完成）`,
+        `- 专注天数：${focusStats.activeDays} 天，日均 ${focusStats.dailyAverage} 分钟`,
+        focusStats.bestDay ? `- 最佳专注日：${focusStats.bestDay.date}（${focusStats.bestDay.minutes} 分钟）` : '',
+        focusStats.abandonedCount ? `- 中断 ${focusStats.abandonedCount} 次（未计入时长）` : '',
+        '',
+      ].filter(Boolean)
+    : [];
   return [
     `# ${title}`,
     '',
@@ -751,6 +844,7 @@ function buildMonthMarkdown(source, title) {
     `- 完成计划内任务：${source.metrics.completedPlanned} 项`,
     `- 计划完成率：${rate}`,
     '',
+    ...focusLines,
     '## 关键成果',
     '',
     markdownList(achievements, (item) => `${item.date} · ${item.completionNote || item.title}${item.area ? `（${item.area}）` : ''}`),
@@ -862,7 +956,11 @@ function renderDayDetail() {
   elements.dayDetailHoliday.hidden = !holiday;
   elements.dayDetailHoliday.textContent = holiday ? `${holiday.badge} · ${holiday.name}` : '';
   elements.dayDetailHoliday.classList.toggle('is-makeup', holiday?.type === 'makeup');
-  elements.dayDetailScore.textContent = `完成 ${completed.length} · 计划 ${plannedCount}`;
+  const focusSummary = Focus.dailyFocusSummary(focusSessions(), date);
+  const focusLabel = focusSummary.completedCount || focusSummary.abandonedCount
+    ? ` · 专注 ${focusSummary.minutes} 分钟（${focusSummary.completedCount} 棵树${focusSummary.abandonedCount ? ` · ${focusSummary.abandonedCount} 棵枯萎` : ''}）`
+    : '';
+  elements.dayDetailScore.textContent = `完成 ${completed.length} · 计划 ${plannedCount}${focusLabel}`;
   elements.dayDetailNote.textContent = detail.dailyNotes
     || (holiday ? `${holiday.name}${holiday.type === 'makeup' ? '，当天按调休工作日标注。' : '，当天按法定假日标注。'}` : '')
     || (detail.dataIntegrity?.complete === false ? detail.dataIntegrity.message : '当天没有填写每日备注。');
@@ -985,8 +1083,321 @@ function renderReview() {
   renderAiSettingsStatus();
 }
 
+const FOCUS_RING_CIRCUMFERENCE = 628.3;
+let focusTicker = null;
+let focusCompletionPending = false;
+
+function formatFocusClock(totalSeconds) {
+  const safe = Math.max(0, Math.round(totalSeconds));
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function focusTaskTitle(taskId) {
+  if (!taskId) return '';
+  return activeTasks().find((task) => task.id === taskId)?.title || '';
+}
+
+function selectedFocusMinutes() {
+  return state.focusMinutes || focusSettings().defaultMinutes || 25;
+}
+
+function setFocusStage(stage) {
+  elements.focusTree.querySelectorAll('g[data-stage]').forEach((group) => {
+    group.classList.toggle('is-on', group.dataset.stage === stage);
+  });
+}
+
+function setFocusPhase(phase) {
+  elements.focusPhaseIdle.hidden = phase !== 'idle';
+  elements.focusPhaseRunning.hidden = phase !== 'running';
+  elements.focusPhaseDone.hidden = phase !== 'done';
+  elements.focusPhaseWithered.hidden = phase !== 'withered';
+  elements.focusClock.classList.toggle('is-withered', phase === 'withered');
+}
+
+function setFocusRing(progress, withered = false) {
+  const clamped = Math.max(0, Math.min(1, Number(progress) || 0));
+  elements.focusRingProgress.style.strokeDashoffset = String(FOCUS_RING_CIRCUMFERENCE * (1 - clamped));
+  elements.focusRingProgress.style.stroke = withered ? '#a49a8c' : 'var(--accent)';
+}
+
+function renderFocusTaskOptions() {
+  const running = runningFocusSession();
+  if (running) return;
+  const current = elements.focusTaskSelect.value;
+  const options = [new Option('自由专注（不关联任务）', '')];
+  visibleTasks(activeTasks(), 'today', '', todayDate())
+    .filter((task) => task.status === 'active')
+    .forEach((task) => options.push(new Option(task.title, task.id)));
+  elements.focusTaskSelect.replaceChildren(...options);
+  if ([...elements.focusTaskSelect.options].some((option) => option.value === current)) {
+    elements.focusTaskSelect.value = current;
+  }
+}
+
+function renderFocusDurationChips() {
+  const minutes = selectedFocusMinutes();
+  elements.focusDurationChips.querySelectorAll('button[data-minutes]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(Number(button.dataset.minutes) === minutes));
+  });
+}
+
+function renderFocusGrove(summary) {
+  const fragment = document.createDocumentFragment();
+  const finished = summary.sessions.filter((session) => session.status !== 'running');
+  if (!finished.length) {
+    fragment.appendChild(makeElement('span', 'focus-grove-empty', '今天还没有种下树'));
+  } else {
+    finished.forEach((session) => {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 120 140');
+      svg.setAttribute('role', 'listitem');
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = session.status === 'completed'
+        ? `专注 ${session.focusedMinutes} 分钟${focusTaskTitle(session.taskId) ? ` · ${focusTaskTitle(session.taskId)}` : ''}`
+        : `中断于 ${session.focusedMinutes} 分钟 · 未计入统计`;
+      const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+      use.setAttribute('href', session.status === 'completed' ? '#tree-bloom' : '#tree-withered');
+      svg.append(title, use);
+      fragment.appendChild(svg);
+    });
+  }
+  elements.focusGrove.replaceChildren(fragment);
+}
+
+function renderFocusBars() {
+  const days = Focus.recentFocusDays(focusSessions(), todayDate(), 7);
+  const max = Math.max(1, ...days.map((day) => day.minutes));
+  const bars = document.createDocumentFragment();
+  const labels = document.createDocumentFragment();
+  const weekdayFormat = new Intl.DateTimeFormat('zh-CN', { weekday: 'narrow', timeZone: 'UTC' });
+  days.forEach((day, index) => {
+    const bar = makeElement('span', index === days.length - 1 ? 'is-today' : '');
+    bar.style.height = `${Math.max(3, (day.minutes / max) * 62)}px`;
+    bar.title = `${day.date} · ${day.minutes} 分钟`;
+    bars.appendChild(bar);
+    labels.appendChild(makeElement('span', '', index === days.length - 1
+      ? '今'
+      : weekdayFormat.format(new Date(`${day.date}T00:00:00Z`))));
+  });
+  elements.focusBars.replaceChildren(bars);
+  elements.focusBarLabels.replaceChildren(labels);
+  elements.focusWeekTotal.textContent = String(days.reduce((total, day) => total + day.minutes, 0));
+}
+
+function renderFocusPanel() {
+  const summary = Focus.dailyFocusSummary(focusSessions(), todayDate());
+  const settings = focusSettings();
+  elements.focusTodayMinutes.textContent = String(summary.minutes);
+  elements.focusTodaySub.textContent = summary.completedCount || summary.abandonedCount
+    ? `种下 ${summary.completedCount} 棵 · 枯萎 ${summary.abandonedCount} 棵`
+    : '还没有种下树';
+  const goal = Number(settings.dailyGoalMinutes) || 0;
+  const ratio = goal ? Math.min(1, summary.minutes / goal) : 0;
+  elements.focusGoalFill.style.width = `${(ratio * 100).toFixed(1)}%`;
+  elements.focusGoalCaption.textContent = `${summary.minutes} / ${goal} 分钟`;
+  renderFocusGrove(summary);
+  renderFocusBars();
+  elements.focusStrictMode.checked = settings.strictMode !== false;
+  elements.focusNotification.checked = settings.completionNotification !== false;
+  if ([...elements.focusGoalSelect.options].some((option) => option.value === String(goal))) {
+    elements.focusGoalSelect.value = String(goal);
+  }
+}
+
+function renderFocusStage() {
+  const running = runningFocusSession();
+  if (running) {
+    setFocusPhase('running');
+    elements.focusPause.hidden = focusSettings().strictMode !== false;
+    elements.focusPause.textContent = running.pausedAt ? '继续' : '暂停';
+    const linkedTitle = focusTaskTitle(running.taskId);
+    elements.focusStateLine.replaceChildren();
+    if (running.pausedAt) {
+      elements.focusStateLine.append('已暂停 · ');
+    }
+    if (linkedTitle) {
+      elements.focusStateLine.append('专注于 ');
+      elements.focusStateLine.appendChild(makeElement('strong', '', linkedTitle));
+    } else {
+      elements.focusStateLine.append('自由专注');
+    }
+    if (!running.pausedAt) elements.focusStateLine.append(' · 保持专注，树在生长');
+    tickFocus();
+    return;
+  }
+
+  if (state.focusOutcome?.kind === 'done') {
+    setFocusPhase('done');
+    setFocusStage('bloom');
+    setFocusRing(1);
+    elements.focusClock.textContent = '00:00';
+    elements.focusStateLine.replaceChildren();
+    elements.focusStateLine.appendChild(
+      makeElement('strong', '', `专注 ${state.focusOutcome.minutes} 分钟 · 树已种下`),
+    );
+    if (state.focusOutcome.taskTitle) elements.focusStateLine.append(` · ${state.focusOutcome.taskTitle}`);
+    return;
+  }
+
+  if (state.focusOutcome?.kind === 'withered') {
+    setFocusPhase('withered');
+    setFocusStage('withered');
+    setFocusRing(state.focusOutcome.progress || 0, true);
+    elements.focusClock.textContent = formatFocusClock(state.focusOutcome.remainingSeconds || 0);
+    elements.focusStateLine.replaceChildren('树枯萎了 · 中断的 ');
+    elements.focusStateLine.appendChild(makeElement('strong', '', `${state.focusOutcome.minutes} 分钟`));
+    elements.focusStateLine.append(' 不计入统计');
+    return;
+  }
+
+  setFocusPhase('idle');
+  setFocusStage('seed');
+  setFocusRing(0);
+  elements.focusClock.textContent = formatFocusClock(selectedFocusMinutes() * 60);
+  elements.focusStateLine.textContent = '选好时长，种下一棵树';
+  renderFocusDurationChips();
+  renderFocusTaskOptions();
+}
+
+function renderFocus() {
+  const summary = Focus.dailyFocusSummary(focusSessions(), todayDate());
+  elements.focusNavCount.textContent = String(summary.completedCount);
+  const running = runningFocusSession();
+  elements.focusChip.hidden = !running || state.view === 'focus';
+  if (state.view !== 'focus') return;
+  renderFocusStage();
+  renderFocusPanel();
+}
+
+function tickFocus() {
+  const running = runningFocusSession();
+  if (!running) return;
+  const now = Date.now();
+  const end = focusSessionEnd(running);
+  const total = running.plannedMinutes * 60_000;
+  const reference = running.pausedAt ? new Date(running.pausedAt).getTime() : now;
+  const remainingMs = Math.max(0, end - reference);
+  const progress = total ? Math.min(1, 1 - remainingMs / total) : 1;
+  const clock = formatFocusClock(remainingMs / 1000);
+  elements.focusChipTime.textContent = clock;
+  if (state.view === 'focus') {
+    elements.focusClock.textContent = clock;
+    setFocusRing(progress);
+    setFocusStage(Focus.growthStage(progress));
+  }
+  if (!running.pausedAt && now >= end) completeRunningFocusSession(running);
+}
+
+function startFocusTicker() {
+  clearInterval(focusTicker);
+  focusTicker = setInterval(() => {
+    try {
+      tickFocus();
+    } catch (error) {
+      console.error('Focus ticker failed:', error);
+    }
+  }, 500);
+}
+
+function completeRunningFocusSession(session) {
+  if (focusCompletionPending) return;
+  focusCompletionPending = true;
+  const taskTitle = focusTaskTitle(session.taskId);
+  // Deterministic event id: the main process delivers the completion
+  // notification through the same command, whichever side lands first wins
+  // and the other becomes a no-op.
+  dispatch({
+    type: 'completeFocusSession',
+    eventId: `focus-complete-${session.id}`,
+    occurredAt: new Date(focusSessionEnd(session)).toISOString(),
+    payload: { sessionId: session.id },
+  }, { selectedId: state.selectedId })
+    .then(() => {
+      state.focusOutcome = { kind: 'done', minutes: session.plannedMinutes, taskTitle };
+      state.view = 'focus';
+      render();
+    })
+    .catch(() => {})
+    .finally(() => {
+      focusCompletionPending = false;
+    });
+}
+
+async function startFocusSession(taskId) {
+  if (runningFocusSession()) {
+    state.view = 'focus';
+    render();
+    return;
+  }
+  const plannedMinutes = selectedFocusMinutes();
+  state.focusOutcome = null;
+  await dispatch({
+    type: 'startFocusSession',
+    payload: {
+      sessionId: commandId('focus'),
+      taskId: taskId || elements.focusTaskSelect.value || null,
+      plannedMinutes,
+    },
+  }, { selectedId: state.selectedId });
+  state.view = 'focus';
+  elements.focusConfirm.hidden = true;
+  render();
+}
+
+async function abandonRunningFocusSession() {
+  const running = runningFocusSession();
+  if (!running) return;
+  const progress = Math.min(1, (Date.now() - new Date(running.startedAt).getTime()) / (running.plannedMinutes * 60_000));
+  const result = await dispatch({
+    type: 'abandonFocusSession',
+    eventId: `focus-abandon-${running.id}-${Date.now()}`,
+    payload: { sessionId: running.id },
+  }, { selectedId: state.selectedId });
+  const stored = result.focusSessions.find((session) => session.id === running.id);
+  state.focusOutcome = {
+    kind: 'withered',
+    minutes: stored?.focusedMinutes ?? 0,
+    progress,
+    remainingSeconds: Math.max(0, Math.round((1 - progress) * running.plannedMinutes * 60)),
+  };
+  elements.focusConfirm.hidden = true;
+  render();
+}
+
+async function resolveInterruptedFocusSessions() {
+  const running = runningFocusSession();
+  if (!running) return;
+  const resolution = Focus.resolveInterruptedSession(running, new Date(), window.TodoDomain);
+  if (!resolution) return;
+  const type = resolution.action === 'complete' ? 'completeFocusSession' : 'abandonFocusSession';
+  try {
+    await dispatch({
+      type,
+      // Completion shares the main-process event id so the recovery path
+      // dedupes against the reminder scheduler instead of racing it.
+      eventId: resolution.action === 'complete'
+        ? `focus-complete-${running.id}`
+        : `focus-recover-${running.id}`,
+      occurredAt: resolution.occurredAt,
+      payload: { sessionId: running.id },
+    }, { selectedId: state.selectedId });
+    if (resolution.action === 'complete') {
+      showToast(`上次专注的 ${running.plannedMinutes} 分钟已完成，树种下了`, false);
+    } else {
+      showToast('上次退出时专注尚未结束，那棵树枯萎了', false);
+    }
+  } catch (error) {
+    console.error('Unable to resolve interrupted focus session:', error);
+  }
+}
+
 function renderDebugState() {
-  const visible = state.view === 'review' ? [] : visibleTasks(activeTasks(), state.view, state.query, todayDate());
+  const visible = state.view === 'review' || state.view === 'focus'
+    ? []
+    : visibleTasks(activeTasks(), state.view, state.query, todayDate());
   const payload = {
     ready: Boolean(state.store),
     version: state.store?.version,
@@ -996,6 +1407,8 @@ function renderDebugState() {
     totalEvents: state.store?.events?.length || 0,
     archiveCount: state.store?.dailyArchives?.length || 0,
     selectedId: state.selectedId,
+    focusSessionCount: focusSessions().length,
+    focusRunning: Boolean(runningFocusSession()),
   };
   elements.debugState.textContent = JSON.stringify(payload);
   document.body.dataset.appReady = String(Boolean(state.store));
@@ -1005,13 +1418,19 @@ function renderDebugState() {
 function render() {
   if (!state.store) return;
   const reviewing = state.view === 'review';
+  const focusing = state.view === 'focus';
   elements.shell.classList.toggle('is-reviewing', reviewing);
-  elements.taskWorkspace.hidden = reviewing;
+  elements.shell.classList.toggle('is-focusing', focusing);
+  elements.taskWorkspace.hidden = reviewing || focusing;
   elements.reviewWorkspace.hidden = !reviewing;
+  elements.focusWorkspace.hidden = !focusing;
+  elements.detailsPanel.hidden = focusing;
+  elements.focusPanel.hidden = !focusing;
   renderSidebar();
   renderHeader();
   if (reviewing) renderReview();
-  else renderTaskList();
+  else if (!focusing) renderTaskList();
+  renderFocus();
   renderDetails();
   renderDebugState();
 }
@@ -1171,6 +1590,79 @@ document.querySelector('.sidebar').addEventListener('click', (event) => {
   render();
 });
 
+elements.focusDurationChips.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-minutes]');
+  if (!button) return;
+  state.focusMinutes = Number(button.dataset.minutes);
+  renderFocusDurationChips();
+  if (!runningFocusSession() && !state.focusOutcome) {
+    elements.focusClock.textContent = formatFocusClock(selectedFocusMinutes() * 60);
+  }
+});
+
+elements.focusStart.addEventListener('click', () => runAction(startFocusSession()));
+
+elements.focusGiveup.addEventListener('click', () => {
+  elements.focusConfirm.hidden = false;
+});
+
+elements.focusConfirmNo.addEventListener('click', () => {
+  elements.focusConfirm.hidden = true;
+});
+
+elements.focusConfirmYes.addEventListener('click', () => runAction(abandonRunningFocusSession()));
+
+elements.focusPause.addEventListener('click', () => {
+  const running = runningFocusSession();
+  if (!running) return;
+  runAction(dispatch({
+    type: running.pausedAt ? 'resumeFocusSession' : 'pauseFocusSession',
+    payload: { sessionId: running.id },
+  }, { selectedId: state.selectedId }));
+});
+
+elements.focusAgain.addEventListener('click', () => {
+  state.focusOutcome = null;
+  runAction(startFocusSession());
+});
+
+elements.focusRest.addEventListener('click', () => {
+  state.focusOutcome = null;
+  render();
+});
+
+elements.focusRetry.addEventListener('click', () => {
+  state.focusOutcome = null;
+  render();
+});
+
+elements.focusChip.addEventListener('click', () => {
+  state.view = 'focus';
+  state.selectedId = null;
+  render();
+});
+
+elements.focusStrictMode.addEventListener('change', () => {
+  runAction(dispatch({
+    type: 'setFocusSettings',
+    payload: { strictMode: elements.focusStrictMode.checked },
+  }, { selectedId: state.selectedId }));
+});
+
+elements.focusNotification.addEventListener('change', () => {
+  runAction(dispatch({
+    type: 'setFocusSettings',
+    payload: { completionNotification: elements.focusNotification.checked },
+  }, { selectedId: state.selectedId }));
+});
+
+elements.focusGoalSelect.addEventListener('change', () => {
+  runAction(dispatch({
+    type: 'setFocusSettings',
+    payload: { dailyGoalMinutes: Number(elements.focusGoalSelect.value) },
+  }, { selectedId: state.selectedId }));
+});
+
 document.querySelector('.quick-options').addEventListener('click', (event) => {
   const button = event.target.closest('[data-quick-date]');
   if (!button) return;
@@ -1218,6 +1710,7 @@ elements.taskList.addEventListener('click', (event) => {
   if (!row) return;
   const action = event.target.closest('[data-action]')?.dataset.action;
   if (action === 'toggle') runAction(toggleTaskById(row.dataset.taskId));
+  else if (action === 'focus') runAction(startFocusSession(row.dataset.taskId));
   else if (action === 'flag') {
     const task = activeTasks().find((item) => item.id === row.dataset.taskId);
     if (task) runAction(patchTask(task.id, { flagged: !task.flagged }, { message: '旗标已更新' }));
@@ -1687,7 +2180,7 @@ document.addEventListener('keydown', (event) => {
   const nativeControl = Boolean(event.target.closest('button, input, textarea, select, a, [contenteditable="true"]'));
   if (modifier && event.key.toLowerCase() === 'n') {
     event.preventDefault();
-    if (state.view === 'review') {
+    if (state.view === 'review' || state.view === 'focus') {
       state.view = 'inbox';
       state.selectedId = null;
       render();
@@ -1697,7 +2190,7 @@ document.addEventListener('keydown', (event) => {
   }
   if (modifier && event.key.toLowerCase() === 'f') {
     event.preventDefault();
-    if (state.view === 'review') state.view = 'all';
+    if (state.view === 'review' || state.view === 'focus') state.view = 'all';
     render();
     elements.searchInput.focus();
     elements.searchInput.select();
@@ -1715,7 +2208,7 @@ document.addEventListener('keydown', (event) => {
     requestAnimationFrame(() => document.querySelector(`[data-task-id="${CSS.escape(closingTaskId)}"]`)?.focus());
     return;
   }
-  if (editable || nativeControl || state.view === 'review') return;
+  if (editable || nativeControl || state.view === 'review' || state.view === 'focus') return;
   const tasks = visibleTasks(activeTasks(), state.view, state.query, todayDate());
   const currentIndex = tasks.findIndex((task) => task.id === state.selectedId);
   if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && tasks.length) {
@@ -1818,6 +2311,7 @@ async function bootstrap() {
   try {
     state.store = coerceStore(await bridge.load());
     state.calendarDate = todayDate();
+    await resolveInterruptedFocusSessions();
     await persistMissingArchives();
     initializeReportControls();
     await loadAiSettings();
@@ -1843,6 +2337,7 @@ async function bootstrap() {
     elements.aiActionNote.textContent = '应用安全组件未加载。请从正式桌面应用启动 Daymark。';
   }
   startDateBoundaryWatch();
+  startFocusTicker();
 }
 
 window.addEventListener('focus', () => {

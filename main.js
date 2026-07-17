@@ -16,7 +16,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { createTodoStore } = require('./src/store');
-const { dateInTimeZone } = require('./src/domain');
+const { dateInTimeZone, focusSessionEnd } = require('./src/domain');
 const { createAiService, ERROR_CODES } = require('./src/ai-service');
 const { buildReportSourceData, buildReportInstructions } = require('./src/ai-report');
 const { evaluateEndOfDayReminder, notificationCopy } = require('./src/end-of-day');
@@ -32,6 +32,7 @@ const APP_ASSETS = new Map([
   ['/src/index.html', 'text/html; charset=utf-8'],
   ['/src/styles.css', 'text/css; charset=utf-8'],
   ['/src/domain.js', 'text/javascript; charset=utf-8'],
+  ['/src/focus.js', 'text/javascript; charset=utf-8'],
   ['/src/planning.js', 'text/javascript; charset=utf-8'],
   ['/src/reporting.js', 'text/javascript; charset=utf-8'],
   ['/src/calendar.js', 'text/javascript; charset=utf-8'],
@@ -561,6 +562,38 @@ async function smokeAudit() {
       document.querySelector('.task-row [data-action="delete"]').click();
       await waitFor(() => debug().visibleTaskCount === 0 && debug().totalEvents >= 16, 'completed deletion');
 
+      document.querySelector('[data-view="focus"]').click();
+      await waitFor(() => debug().view === 'focus' && !document.querySelector('#focus-workspace').hidden, 'focus view');
+      const focusIdleReady = document.querySelector('#focus-clock')?.textContent === '25:00'
+        && !document.querySelector('#focus-panel').hidden
+        && document.querySelector('#focus-strict-mode')?.checked === true;
+      document.querySelector('#focus-start').click();
+      await waitFor(() => debug().focusRunning === true, 'focus session start');
+      document.querySelector('[data-view="today"]').click();
+      await waitFor(() => debug().view === 'today' && !document.querySelector('#focus-chip').hidden, 'focus chip in today view');
+      document.querySelector('#focus-chip').click();
+      await waitFor(() => debug().view === 'focus', 'focus chip navigation');
+      document.querySelector('#focus-giveup').click();
+      await waitFor(() => !document.querySelector('#focus-confirm').hidden, 'focus abandon confirm');
+      document.querySelector('#focus-confirm-yes').click();
+      await waitFor(() => debug().focusRunning === false && debug().focusSessionCount === 1, 'focus abandon');
+      await waitFor(() => !document.querySelector('#focus-phase-withered').hidden, 'withered phase');
+      const focusStore = await window.daymark.load();
+      const abandonedSession = focusStore.focusSessions[0];
+      const focusSummary = window.DaymarkFocus.dailyFocusSummary(
+        focusStore.focusSessions,
+        window.TodoDomain.dateInTimeZone(new Date(), 'Asia/Shanghai'),
+      );
+      const focusFlowSynced = focusIdleReady
+        && abandonedSession?.status === 'abandoned'
+        && abandonedSession?.plannedMinutes === 25
+        && focusSummary.minutes === 0
+        && focusSummary.abandonedCount === 1
+        && document.querySelector('#focus-nav-count')?.textContent === '0'
+        && focusStore.events.some((event) => event.type === 'startFocusSession')
+        && focusStore.events.some((event) => event.type === 'abandonFocusSession')
+        && focusStore.meta.focusSettings?.strictMode === true;
+
       document.querySelector('[data-view="review"]').click();
       await waitFor(() => document.querySelector('[data-review-mode="quarter"]'), 'review workspace');
       document.querySelector('[data-review-mode="quarter"]').click();
@@ -604,6 +637,7 @@ async function smokeAudit() {
         chinaTimeSynced,
         endOfDaySettingSynced,
         dateShortcutSpacing,
+        focusFlowSynced,
         top3MarkersVisible,
         flagMarkersVisible,
         futureAttributionSynced,
@@ -622,7 +656,7 @@ async function smokeAudit() {
   if (
     !result.ready ||
     result.title !== 'Daymark' ||
-    result.state.version !== 2 ||
+    result.state.version !== 3 ||
     result.state.reviewMode !== 'quarter' ||
     !result.reportTitle.includes('季度工作总结') ||
     /\b[1-9]\d*\b/.test(result.completedMetric) ||
@@ -632,6 +666,7 @@ async function smokeAudit() {
     !result.chinaTimeSynced ||
     !result.endOfDaySettingSynced ||
     !result.dateShortcutSpacing ||
+    !result.focusFlowSynced ||
     !result.top3MarkersVisible ||
     !result.flagMarkersVisible ||
     !result.futureAttributionSynced ||
@@ -654,7 +689,9 @@ async function smokeAudit() {
     persisted.meta.timeZone !== 'Asia/Shanghai' ||
     persisted.meta.endOfDayReminderEnabled !== true ||
     persisted.meta.endOfDayReminderTime !== '18:15' ||
-    persisted.events.length < 16
+    persisted.focusSessions.length !== 1 ||
+    persisted.focusSessions[0].status !== 'abandoned' ||
+    persisted.events.length < 18
   ) {
     throw new Error(`Unexpected smoke state: ${JSON.stringify(result)}`);
   }
@@ -1010,9 +1047,35 @@ async function deliverEndOfDayReminder() {
   });
 }
 
+async function deliverFocusCompletions() {
+  const store = await todoStore.load();
+  const now = Date.now();
+  const due = (store.focusSessions || []).filter(
+    (session) => session.status === 'running' && !session.pausedAt && now >= focusSessionEnd(session),
+  );
+  for (const session of due) {
+    // Same deterministic event id as the renderer: whichever process
+    // completes the session first wins, the other lands as a no-op.
+    await todoStore.execute({
+      type: 'completeFocusSession',
+      eventId: `focus-complete-${session.id}`,
+      occurredAt: new Date(focusSessionEnd(session)).toISOString(),
+      payload: { sessionId: session.id },
+    });
+    if (store.meta?.focusSettings?.completionNotification !== false && Notification.isSupported()) {
+      const task = session.taskId ? store.tasks.find((item) => item.id === session.taskId) : null;
+      new Notification({
+        title: '专注完成 · 树已种下',
+        body: task ? `${task.title} · ${session.plannedMinutes} 分钟` : `自由专注 ${session.plannedMinutes} 分钟`,
+      }).show();
+    }
+  }
+}
+
 async function deliverScheduledReminders() {
   await deliverDueReminders();
   await deliverEndOfDayReminder();
+  await deliverFocusCompletions();
 }
 
 function startReminderScheduler() {
