@@ -18,7 +18,9 @@ contextBridge.exposeInMainWorld('daymark', {
   clearAiKey: () => ipcRenderer.invoke('ai:clear-key'),
   generateAiReport: (options) => ipcRenderer.invoke('ai:generate-report', options),
   cancelAiReport: (requestId) => ipcRenderer.invoke('ai:cancel', { requestId }),
+  notifyFocusCompleted: (sessionId) => ipcRenderer.invoke('focus:notify-completion', { sessionId }),
   onFocusNewTask: (callback) => subscribe('app:focus-new-task', callback),
   onFocusSearch: (callback) => subscribe('app:focus-search', callback),
   onOpenDailyShutdown: (callback) => subscribe('app:open-daily-shutdown', callback),
+  onOpenFocus: (callback) => subscribe('app:open-focus', callback),
 });

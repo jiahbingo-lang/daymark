@@ -2968,6 +2968,32 @@ select:focus-visible {
   font-weight: 620;
 }
 
+/* Picking a duration is a small decision, so this dialog stays far narrower
+   than the planning rituals that share its shell — but wide enough to keep the
+   five durations on one row, since a lone wrapped chip reads as a mistake. */
+.ritual-dialog.focus-start-dialog {
+  width: min(540px, calc(100vw - 40px));
+}
+
+.focus-start-dialog .ritual-dialog-header p {
+  max-width: 30ch;
+  overflow-wrap: anywhere;
+}
+
+.focus-start-body {
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+}
+
+.focus-start-hint {
+  margin: 0;
+  min-height: 16px;
+  color: var(--faint);
+  font-size: 11px;
+  text-align: center;
+}
+
 .focus-task-row {
   display: flex;
   gap: 8px;

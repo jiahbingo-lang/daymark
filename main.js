@@ -309,6 +309,14 @@ function showAndFocusDailyShutdown() {
   mainWindow.webContents.send('app:open-daily-shutdown');
 }
 
+function showAndFocusFocusView() {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send('app:open-focus');
+}
+
 async function smokeAudit() {
   const result = await mainWindow.webContents.executeJavaScript(`
     (async () => {
@@ -947,6 +955,16 @@ function installIpc() {
     assertTrusted(event);
     return todoStore.persistArchives(dailyArchives);
   });
+  // The renderer reports which session finished, never what to say about it:
+  // the copy is built here from the stored session.
+  ipcMain.handle('focus:notify-completion', async (event, payload) => {
+    assertTrusted(event);
+    assertExactObject(payload, ['sessionId'], 'focus:notify-completion');
+    if (typeof payload.sessionId !== 'string') {
+      throw new TypeError('focus:notify-completion sessionId must be a string');
+    }
+    return notifyFocusCompletion(payload.sessionId.slice(0, 120));
+  });
   ipcMain.handle('reports:save-markdown', async (event, payload) => {
     assertTrusted(event);
     const content = String(payload?.content || '');
@@ -1122,6 +1140,34 @@ async function deliverEndOfDayReminder() {
   });
 }
 
+// Either process may be the one to complete a session — the renderer ticks
+// every half second, this sweep every thirty. The notification therefore hangs
+// off the completion itself rather than off whichever side won, and this set
+// keeps the two paths from ever announcing the same session twice.
+const notifiedFocusSessions = new Set();
+
+async function notifyFocusCompletion(sessionId) {
+  if (!sessionId || notifiedFocusSessions.has(sessionId)) return { notified: false };
+  const store = await todoStore.load();
+  const session = (store.focusSessions || []).find((item) => item.id === sessionId);
+  if (!session || session.status !== 'completed') return { notified: false };
+
+  notifiedFocusSessions.add(sessionId);
+  if (store.meta?.focusSettings?.completionNotification === false) return { notified: false };
+  if (!Notification.isSupported()) return { notified: false };
+
+  const task = session.taskId ? store.tasks.find((item) => item.id === session.taskId) : null;
+  const notification = new Notification({
+    title: '专注完成 · 树已种下',
+    body: task
+      ? `${task.title} · ${session.plannedMinutes} 分钟`
+      : `自由专注 ${session.plannedMinutes} 分钟`,
+  });
+  notification.on('click', showAndFocusFocusView);
+  notification.show();
+  return { notified: true };
+}
+
 async function deliverFocusCompletions() {
   const store = await todoStore.load();
   const now = Date.now();
@@ -1137,13 +1183,7 @@ async function deliverFocusCompletions() {
       occurredAt: new Date(focusSessionEnd(session)).toISOString(),
       payload: { sessionId: session.id },
     });
-    if (store.meta?.focusSettings?.completionNotification !== false && Notification.isSupported()) {
-      const task = session.taskId ? store.tasks.find((item) => item.id === session.taskId) : null;
-      new Notification({
-        title: '专注完成 · 树已种下',
-        body: task ? `${task.title} · ${session.plannedMinutes} 分钟` : `自由专注 ${session.plannedMinutes} 分钟`,
-      }).show();
-    }
+    await notifyFocusCompletion(session.id);
   }
 }
 

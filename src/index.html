@@ -702,6 +702,33 @@
       </form>
     </dialog>
 
+    <dialog class="ritual-dialog focus-start-dialog" id="focus-start-dialog" aria-labelledby="focus-start-title">
+      <form method="dialog" id="focus-start-form">
+        <header class="ritual-dialog-header">
+          <div>
+            <span class="ritual-kicker">FOCUS</span>
+            <h2 id="focus-start-title">开始专注</h2>
+            <p id="focus-start-task-title">选择这次要专注多久</p>
+          </div>
+          <button type="button" class="icon-button" data-close-dialog="focus-start-dialog" aria-label="关闭专注设置">×</button>
+        </header>
+        <div class="ritual-dialog-body focus-start-body">
+          <div class="focus-duration-chips" id="focus-start-chips" role="group" aria-label="专注时长">
+            <button type="button" data-minutes="15" aria-pressed="false">15 分钟</button>
+            <button type="button" data-minutes="25" aria-pressed="true">25 分钟</button>
+            <button type="button" data-minutes="45" aria-pressed="false">45 分钟</button>
+            <button type="button" data-minutes="60" aria-pressed="false">60 分钟</button>
+            <button type="button" data-minutes="90" aria-pressed="false">90 分钟</button>
+          </div>
+          <p class="focus-start-hint" id="focus-start-hint"></p>
+        </div>
+        <footer class="ritual-dialog-footer">
+          <button type="button" class="secondary-button" data-close-dialog="focus-start-dialog">取消</button>
+          <button type="button" class="primary-button" id="focus-start-confirm">开始专注</button>
+        </footer>
+      </form>
+    </dialog>
+
     <dialog class="ritual-dialog shutdown-dialog" id="daily-shutdown-dialog" aria-labelledby="daily-shutdown-title">
       <form method="dialog" id="daily-shutdown-form">
         <header class="ritual-dialog-header">

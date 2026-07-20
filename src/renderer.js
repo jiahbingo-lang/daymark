@@ -69,6 +69,11 @@ const browserPreviewBridge = {
   onFocusNewTask: () => () => {},
   onFocusSearch: () => () => {},
   onOpenDailyShutdown: () => () => {},
+  onOpenFocus: () => () => {},
+  async notifyFocusCompleted() {
+    // A browser preview has no system notification channel to reach.
+    return { notified: false };
+  },
   async getAiSettings() {
     return { ...previewAiSettings };
   },
@@ -106,6 +111,8 @@ const unavailableBridge = {
   onFocusNewTask: () => () => {},
   onFocusSearch: () => () => {},
   onOpenDailyShutdown: () => () => {},
+  onOpenFocus: () => () => {},
+  async notifyFocusCompleted() { return { notified: false }; },
 };
 const bridgeUnavailable = !window.daymark && !previewEnabled;
 const bridge = window.daymark || (previewEnabled ? browserPreviewBridge : unavailableBridge);
@@ -205,6 +212,8 @@ const state = {
   aiReportText: '',
   focusMinutes: null,
   focusOutcome: null,
+  focusStartTaskId: null,
+  focusStartMinutes: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -361,6 +370,11 @@ const elements = {
   focusDurationChips: $('#focus-duration-chips'),
   focusTaskSelect: $('#focus-task-select'),
   focusStart: $('#focus-start'),
+  focusStartDialog: $('#focus-start-dialog'),
+  focusStartChips: $('#focus-start-chips'),
+  focusStartTaskTitle: $('#focus-start-task-title'),
+  focusStartHint: $('#focus-start-hint'),
+  focusStartConfirm: $('#focus-start-confirm'),
   focusPause: $('#focus-pause'),
   focusGiveup: $('#focus-giveup'),
   focusConfirm: $('#focus-confirm'),
@@ -1797,6 +1811,10 @@ function completeRunningFocusSession(session) {
       state.focusOutcome = { kind: 'done', minutes: session.plannedMinutes, taskTitle };
       state.view = 'focus';
       render();
+      // The renderer's half-second ticker almost always finishes a session
+      // before the main process sweep notices, so the notification has to be
+      // asked for here; main de-duplicates if its sweep gets there first.
+      return bridge.notifyFocusCompleted(session.id);
     })
     .catch(() => {})
     .finally(() => {
@@ -1804,13 +1822,56 @@ function completeRunningFocusSession(session) {
     });
 }
 
-async function startFocusSession(taskId) {
+function focusStartDurationOptions() {
+  return [...elements.focusStartChips.querySelectorAll('button[data-minutes]')]
+    .map((button) => Number(button.dataset.minutes));
+}
+
+// An estimate is the closest thing to the user's own answer for how long this
+// should take, so it picks the starting chip when the task carries one.
+function suggestedFocusMinutes(task) {
+  const estimate = Number(task?.estimateMinutes) || 0;
+  if (!estimate) return null;
+  return focusStartDurationOptions()
+    .reduce((best, option) => (
+      Math.abs(option - estimate) < Math.abs(best - estimate) ? option : best
+    ));
+}
+
+function renderFocusStartChips() {
+  elements.focusStartChips.querySelectorAll('button[data-minutes]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(Number(button.dataset.minutes) === state.focusStartMinutes));
+  });
+}
+
+function openFocusStart(taskId) {
+  // An already-running session owns the timer; send the user to it rather than
+  // offering a second start they cannot have.
   if (runningFocusSession()) {
     state.view = 'focus';
     render();
     return;
   }
-  const plannedMinutes = selectedFocusMinutes();
+  const task = activeTasks().find((item) => item.id === taskId && !item.deletedAt);
+  if (!task) return;
+  const suggestion = suggestedFocusMinutes(task);
+  state.focusStartTaskId = task.id;
+  state.focusStartMinutes = suggestion || selectedFocusMinutes();
+  elements.focusStartTaskTitle.textContent = task.title;
+  elements.focusStartHint.textContent = suggestion
+    ? `已按预计用时 ${task.estimateMinutes} 分钟推荐`
+    : '';
+  renderFocusStartChips();
+  if (!elements.focusStartDialog.open) elements.focusStartDialog.showModal();
+}
+
+async function startFocusSession(taskId, minutes) {
+  if (runningFocusSession()) {
+    state.view = 'focus';
+    render();
+    return;
+  }
+  const plannedMinutes = Number(minutes) || selectedFocusMinutes();
   state.focusOutcome = null;
   await dispatch({
     type: 'startFocusSession',
@@ -2295,6 +2356,28 @@ elements.focusDurationChips.addEventListener('click', (event) => {
   }
 });
 
+elements.focusStartChips.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-minutes]');
+  if (!button) return;
+  state.focusStartMinutes = Number(button.dataset.minutes);
+  elements.focusStartHint.textContent = '';
+  renderFocusStartChips();
+});
+
+elements.focusStartConfirm.addEventListener('click', () => {
+  const taskId = state.focusStartTaskId;
+  const minutes = state.focusStartMinutes;
+  elements.focusStartDialog.close();
+  // The chosen length becomes the new default so the focus view and the next
+  // task both open on it.
+  state.focusMinutes = minutes;
+  runAction(startFocusSession(taskId, minutes));
+});
+
+elements.focusStartDialog.addEventListener('close', () => {
+  state.focusStartTaskId = null;
+});
+
 elements.focusStart.addEventListener('click', () => runAction(startFocusSession()));
 
 elements.focusGiveup.addEventListener('click', () => {
@@ -2697,7 +2780,7 @@ elements.taskList.addEventListener('click', (event) => {
   if (!row) return;
   const action = event.target.closest('[data-action]')?.dataset.action;
   if (action === 'toggle') runAction(toggleTaskById(row.dataset.taskId));
-  else if (action === 'focus') runAction(startFocusSession(row.dataset.taskId));
+  else if (action === 'focus') openFocusStart(row.dataset.taskId);
   else if (action === 'flag') {
     const task = activeTasks().find((item) => item.id === row.dataset.taskId);
     if (task) runAction(patchTask(task.id, { flagged: !task.flagged }, { message: '旗标已更新' }));
@@ -3292,6 +3375,13 @@ bridge.onOpenDailyShutdown(() => {
   elements.searchInput.value = '';
   render();
   requestAnimationFrame(openDailyShutdown);
+});
+
+bridge.onOpenFocus(() => {
+  state.view = 'focus';
+  state.query = '';
+  elements.searchInput.value = '';
+  render();
 });
 
 async function persistMissingArchives() {
