@@ -1,5 +1,5 @@
 (function exposeDomain(global) {
-  const STORE_VERSION = 4;
+  const STORE_VERSION = 5;
   const PRIORITIES = ['none', 'low', 'medium', 'high'];
   const VIEWS = ['all', 'inbox', 'today', 'upcoming', 'completed'];
   const FOCUS_SESSION_STATUSES = ['running', 'completed', 'abandoned'];
@@ -418,6 +418,63 @@
     };
   }
 
+  // Minutes that the zone is ahead of UTC at a given instant. Two passes so a
+  // DST boundary near the guess still resolves to the right offset.
+  function zoneOffsetMinutes(instant, timeZone) {
+    const read = (at) => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: normalizeTimeZone(timeZone),
+        hour12: false,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }).formatToParts(at);
+      const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+      const asUtc = Date.UTC(
+        Number(value.year),
+        Number(value.month) - 1,
+        Number(value.day),
+        Number(value.hour) % 24,
+        Number(value.minute),
+        Number(value.second),
+      );
+      return Math.round((asUtc - at.getTime()) / 60_000);
+    };
+    const first = read(instant);
+    return read(new Date(instant.getTime() - first * 60_000));
+  }
+
+  // The instant at which the given local date begins.
+  function zonedDayStart(date, timeZone) {
+    const guess = new Date(`${date}T00:00:00.000Z`);
+    return new Date(guess.getTime() - zoneOffsetMinutes(guess, timeZone) * 60_000);
+  }
+
+  // Midnight closing the day a time entry belongs to.
+  function timeEntryDayEnd(entry, timeZone) {
+    const started = toDate(entry?.startedAt);
+    const date = normalizeDate(entry?.reportingDate) || dateInTimeZone(started, timeZone);
+    return zonedDayStart(addDays(date, 1), timeZone).toISOString();
+  }
+
+  // Closing a run never crosses midnight: a timer left going overnight is cut
+  // at the end of the day it belongs to rather than logging the small hours as
+  // work. Both stopping and completing go through here so they agree.
+  function closeTimeEntry(entry, at, timeZone) {
+    const started = toDate(entry.startedAt);
+    const boundary = new Date(timeEntryDayEnd(entry, timeZone));
+    const requested = toDate(at);
+    const ended = requested.getTime() > boundary.getTime() ? boundary : requested;
+    return sanitizeTimeEntry({
+      ...entry,
+      endedAt: ended.toISOString(),
+      durationSeconds: Math.max(1, Math.round((ended.getTime() - started.getTime()) / 1000)),
+    }, { timeZone });
+  }
+
   function sanitizeTimeEntries(value, options = {}) {
     if (!Array.isArray(value)) return [];
     const seen = new Set();
@@ -557,7 +614,7 @@
     // build wrote focusSessions/focusSettings. v4 is the union of both halves,
     // and the sanitizer below defaults whichever half a file lacks, so either
     // v3 upgrades without having to tell the two apart.
-    if (!Number.isInteger(version) || ![1, 2, 3, STORE_VERSION].includes(version)) {
+    if (!Number.isInteger(version) || ![1, 2, 3, 4, STORE_VERSION].includes(version)) {
       throw new Error(`Unsupported store version: ${rawVersion}`);
     }
     if (version === 1) return migrateV1(input, options);
@@ -869,6 +926,16 @@
       before = task;
       after = toggleTask(task, occurredDate);
       next.tasks = next.tasks.map((item) => (item.id === task.id ? after : item));
+      // Finishing the task is the only way to end its timing, so completing it
+      // from anywhere — row, details panel, keyboard — has to close the running
+      // entry. Otherwise it would keep accruing against a task already done.
+      if (after.status === 'completed') {
+        next.timeEntries = next.timeEntries.map((entry) => (
+          entry.taskId === task.id && !entry.endedAt
+            ? closeTimeEntry(entry, occurredDate, next.meta.timeZone)
+            : entry
+        ));
+      }
     } else if (command.type === 'delete') {
       const task = activeTaskById(next.tasks, taskId);
       if (!task) throw new Error(`Task not found: ${taskId}`);
@@ -1149,11 +1216,7 @@
       if (!existing) throw new Error('Running focus session not found');
       taskId = existing.taskId;
       before = existing;
-      after = sanitizeTimeEntry({
-        ...existing,
-        endedAt: occurredAt,
-        durationSeconds: Math.max(1, Math.round((occurredDate - new Date(existing.startedAt)) / 1000)),
-      }, { timeZone: next.meta.timeZone });
+      after = closeTimeEntry(existing, occurredDate, next.meta.timeZone);
       next.timeEntries = next.timeEntries.map((entry) => (entry.id === existing.id ? after : entry));
     } else if (command.type === 'addManualTime') {
       const task = activeTaskById(next.tasks, taskId);
@@ -1243,6 +1306,8 @@
     nextRecurringDate,
     focusSessionEnd,
     elapsedFocusMinutes,
+    timeEntryDayEnd,
+    addDays,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

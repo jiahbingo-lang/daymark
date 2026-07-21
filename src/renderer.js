@@ -14,14 +14,16 @@ const {
 const Reporting = window.DaymarkReporting;
 const Calendar = window.DaymarkCalendar;
 const Planning = window.DaymarkPlanning;
-const Execution = window.DaymarkExecution;
+const Worklog = window.DaymarkWorklog;
 const DailyPlanning = window.DaymarkDailyPlanning;
 const AiReport = window.DaymarkAiReport;
 const Focus = window.DaymarkFocus;
 const DAYMARK_TIME_ZONE = 'Asia/Shanghai';
-const EXECUTION_DAY_START_MINUTE = 0;
-const EXECUTION_DAY_END_MINUTE = 1440;
-const EXECUTION_DEFAULT_SCROLL_MINUTE = 480;
+const WORKLOG_START_HOUR = 0;
+const WORKLOG_END_HOUR = 24;
+const WORKLOG_PIXELS_PER_MINUTE = 1.1;
+const WORKLOG_MIN_BLOCK_HEIGHT = 22;
+const WORKLOG_DEFAULT_SCROLL_MINUTE = 480;
 
 function commandId(prefix = 'event') {
   if (window.crypto?.randomUUID) return `${prefix}-${window.crypto.randomUUID()}`;
@@ -153,8 +155,15 @@ const VIEW_COPY = {
     emptyTitle: '还没有完成任何任务',
     emptyCopy: '完成任务后，可以在这里查看。',
   },
-  execution: {
-    title: '执行日历',
+  worklog: {
+    title: '处理记录',
+    listLabel: '',
+    hint: '',
+    emptyTitle: '',
+    emptyCopy: '',
+  },
+  calendar: {
+    title: '待办日历',
     listLabel: '',
     hint: '',
     emptyTitle: '',
@@ -193,8 +202,11 @@ const state = {
   reviewMonth: null,
   calendarMonth: null,
   reviewSelectedDate: null,
-  executionMode: 'week',
-  executionDate: null,
+  worklogMode: 'day',
+  worklogDate: null,
+  lastTimedTaskId: null,
+  calendarMode: 'week',
+  todoCalendarDate: null,
   history: [],
   report: null,
   reportMarkdown: '',
@@ -247,19 +259,29 @@ const elements = {
   shutdownToday: $('#shutdown-today'),
   dailyNote: $('#daily-note'),
   dailyNoteInput: $('#daily-note-input'),
-  executionWorkspace: $('#execution-workspace'),
-  executionDate: $('#execution-date'),
-  executionPrevious: $('#execution-previous'),
-  executionNext: $('#execution-next'),
-  executionToday: $('#execution-today'),
-  executionSummary: $('#execution-summary'),
-  executionCalendar: $('#execution-calendar'),
-  executionCalendarScroll: $('#execution-calendar-scroll'),
-  focusStrip: $('#focus-strip'),
-  focusTaskTitle: $('#focus-task-title'),
-  focusElapsed: $('#focus-elapsed'),
-  stopFocus: $('#stop-focus'),
-  completeFocus: $('#complete-focus'),
+  worklogWorkspace: $('#worklog-workspace'),
+  worklogDate: $('#worklog-date'),
+  worklogPrevious: $('#worklog-previous'),
+  worklogNext: $('#worklog-next'),
+  worklogToday: $('#worklog-today'),
+  worklogRange: $('#worklog-range'),
+  worklogSummary: $('#worklog-summary'),
+  worklogCalendar: $('#worklog-calendar'),
+  worklogScroll: $('#worklog-scroll'),
+  worklogRollup: $('#worklog-rollup'),
+  todoCalendarWorkspace: $('#todo-calendar-workspace'),
+  todoCalendarRange: $('#todo-calendar-range'),
+  todoCalendarPrevious: $('#todo-calendar-previous'),
+  todoCalendarNext: $('#todo-calendar-next'),
+  todoCalendarToday: $('#todo-calendar-today'),
+  todoCalendarBody: $('#todo-calendar-body'),
+  todoCalendarSummary: $('#todo-calendar-summary'),
+  runStrip: $('#run-strip'),
+  runTaskTitle: $('#run-task-title'),
+  runElapsed: $('#run-elapsed'),
+  runSegments: $('#run-segments'),
+  runPause: $('#run-pause'),
+  runComplete: $('#run-complete'),
   reviewWorkspace: $('#review-workspace'),
   reviewDashboard: $('#review-dashboard'),
   dailyReviewPane: $('#daily-review-pane'),
@@ -402,11 +424,8 @@ let noteTimer;
 let dateCheckTimer;
 let focusTicker;
 let pendingDailyNote = null;
-let draggedExecutionBlock = null;
-let resizingExecutionBlock = null;
-let pointerDraggingExecutionBlock = null;
-let executionAutoScrollFrame = null;
-let executionAutoScrollVelocity = 0;
+let runTicker = null;
+let draggedCalendarTask = null;
 const fieldTimers = new Map();
 const pendingTaskActions = new Set();
 const detailsOverlayQuery = window.matchMedia('(max-width: 1030px)');
@@ -655,7 +674,7 @@ function renderSidebar() {
 
 function renderHeader() {
   const copy = VIEW_COPY[state.view];
-  const specialView = state.view === 'review' || state.view === 'execution' || state.view === 'focus';
+  const specialView = ['review', 'worklog', 'calendar', 'focus'].includes(state.view);
   const count = specialView ? 0 : visibleTasks(activeTasks(), state.view, '', todayDate()).length;
   elements.dateLabel.textContent = formatHeaderDate();
   elements.viewTitle.textContent = copy.title;
@@ -667,8 +686,15 @@ function renderHeader() {
       : '选一段时间，专心种一棵树';
   } else if (state.view === 'review') {
     elements.viewSummary.textContent = '每日记录自动沉淀，报告默认在本机生成';
-  } else if (state.view === 'execution') {
-    elements.viewSummary.textContent = '自动安排可拖动锁定，实际用时会进入工作总结';
+  } else if (state.view === 'worklog') {
+    const summary = Worklog.dailySummary(state.store, state.worklogDate || todayDate(), { now: new Date() });
+    elements.viewSummary.textContent = summary.segmentCount
+      ? `处理 ${summary.taskCount} 个任务 · 累计 ${humanMinutes(summary.minutes)}`
+      : '开始处理任务后，这里会记录每一段时间';
+  } else if (state.view === 'calendar') {
+    elements.viewSummary.textContent = state.calendarMode === 'week'
+      ? '这一周每天要做什么'
+      : '整月的待办分布';
   } else if (state.view === 'completed') {
     elements.viewSummary.textContent = `${count} 件已完成`;
   } else if (state.view === 'inbox') {
@@ -732,8 +758,12 @@ function buildTaskRow(task, options = {}) {
     deadline.classList.toggle('is-overdue', task.status === 'active' && task.dueDate < todayDate());
   }
   if (task.estimateMinutes) appendMeta(meta, `${task.estimateMinutes} 分钟`, 'estimate-pill');
-  const actualMinutes = Execution.actualMinutesForTask(state.store, task.id, { now: new Date() });
-  if (actualMinutes) appendMeta(meta, `实际 ${actualMinutes} 分钟`, 'actual-pill');
+  const actualMinutes = Worklog.actualMinutesForTask(state.store, task.id, { now: new Date() });
+  const segmentCount = actualMinutes ? Worklog.entriesForTask(state.store, task.id).length : 0;
+  if (actualMinutes) {
+    appendMeta(meta, `实际 ${humanMinutes(actualMinutes)} · ${segmentCount} 段`, 'actual-pill');
+  }
+  if (runningEntry()?.taskId === task.id) appendMeta(meta, '处理中', 'running-pill');
   if (task.area) appendMeta(meta, task.area, 'area-pill');
   if (task.priority !== 'none') appendMeta(meta, PRIORITY_LABELS[task.priority], `priority-${task.priority}`);
   if (task.repeatRule) appendMeta(meta, '重复', 'repeat-pill');
@@ -765,19 +795,34 @@ function buildTaskRow(task, options = {}) {
   remove.appendChild(trashIcon());
 
   row.append(checkbox, main);
-  if (state.view === 'today' && task.status === 'active' && !runningFocusSession()) {
-    row.classList.add('has-focus-action');
-    const focusGo = document.createElement('button');
-    focusGo.type = 'button';
-    focusGo.className = 'focus-go-action';
-    focusGo.dataset.action = 'focus';
-    focusGo.setAttribute('aria-label', `为“${task.title}”开始专注`);
-    focusGo.appendChild(createSvg([
-      { attrs: { d: 'M12 21v-6' } },
-      { attrs: { d: 'M12 15c-3.5 0-6-2.4-6-5.5C6 6.4 8.5 3 12 3s6 3.4 6 6.5c0 3.1-2.5 5.5-6 5.5z' } },
-    ]));
-    focusGo.append('专注');
-    row.appendChild(focusGo);
+  if (state.view === 'today' && task.status === 'active') {
+    row.classList.add('has-row-actions');
+    const timing = runningEntry()?.taskId === task.id;
+    const timer = document.createElement('button');
+    timer.type = 'button';
+    timer.className = `timer-action${timing ? ' is-running' : ''}`;
+    timer.dataset.action = timing ? 'pause' : 'start';
+    timer.setAttribute('aria-label', timing ? `暂停“${task.title}”的计时` : `开始处理“${task.title}”`);
+    timer.appendChild(timing
+      ? createSvg([{ tag: 'rect', attrs: { x: '7', y: '5', width: '3.5', height: '14', rx: '1' } },
+                   { tag: 'rect', attrs: { x: '13.5', y: '5', width: '3.5', height: '14', rx: '1' } }])
+      : createSvg([{ attrs: { d: 'M8 5.5v13l11-6.5z' } }]));
+    timer.append(timing ? '暂停' : actualMinutes ? '继续' : '开始');
+    row.appendChild(timer);
+
+    if (!runningFocusSession()) {
+      const focusGo = document.createElement('button');
+      focusGo.type = 'button';
+      focusGo.className = 'focus-go-action';
+      focusGo.dataset.action = 'focus';
+      focusGo.setAttribute('aria-label', `为“${task.title}”开始专注`);
+      focusGo.appendChild(createSvg([
+        { attrs: { d: 'M12 21v-6' } },
+        { attrs: { d: 'M12 15c-3.5 0-6-2.4-6-5.5C6 6.4 8.5 3 12 3s6 3.4 6 6.5c0 3.1-2.5 5.5-6 5.5z' } },
+      ]));
+      focusGo.append('专注');
+      row.appendChild(focusGo);
+    }
   }
   row.append(flag, priorityMark, remove);
   return row;
@@ -1933,13 +1978,13 @@ async function resolveInterruptedFocusSessions() {
   }
 }
 
-function executionDateLabel(date) {
+function calendarDateLabel(date) {
   return new Intl.DateTimeFormat('zh-CN', {
     month: 'numeric', day: 'numeric', weekday: 'short', timeZone: 'UTC',
   }).format(new Date(`${date}T00:00:00Z`));
 }
 
-function focusClock(seconds) {
+function elapsedClock(seconds) {
   const value = Math.max(0, Math.floor(Number(seconds) || 0));
   const hours = String(Math.floor(value / 3600)).padStart(2, '0');
   const minutes = String(Math.floor((value % 3600) / 60)).padStart(2, '0');
@@ -1947,179 +1992,221 @@ function focusClock(seconds) {
   return `${hours}:${minutes}:${remainder}`;
 }
 
-function updateFocusClock() {
-  const entry = Execution.activeFocusEntry(state.store);
-  if (!entry) return;
-  elements.focusElapsed.textContent = focusClock(Execution.durationSeconds(entry, new Date()));
+function humanMinutes(value) {
+  const minutes = Math.max(0, Math.round(Number(value) || 0));
+  if (minutes < 60) return `${minutes} 分`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours} 小时 ${rest} 分` : `${hours} 小时`;
 }
 
-function renderFocusStrip() {
-  const entry = Execution.activeFocusEntry(state.store);
-  clearInterval(focusTicker);
-  focusTicker = null;
-  elements.focusStrip.hidden = !entry;
-  if (!entry) return;
-  const task = activeTasks().find((item) => item.id === entry.taskId && !item.deletedAt);
-  elements.focusTaskTitle.textContent = task?.title || '已移除的任务';
-  updateFocusClock();
-  focusTicker = setInterval(updateFocusClock, 1000);
+function runningEntry() {
+  return Worklog.runningEntry(state.store);
 }
 
-function renderExecutionBlock(block, schedule) {
-  const task = block.task;
-  const actual = Execution.actualMinutesForTask(state.store, task.id, { now: new Date() });
-  const risk = Execution.riskForTask(state.store, task, { today: todayDate(), schedule: schedule.schedule });
-  const top = Math.max(EXECUTION_DAY_START_MINUTE, block.startMinute);
-  const available = Math.max(30, EXECUTION_DAY_END_MINUTE - top);
-  const height = Math.min(available, Math.max(38, block.durationMinutes));
-  const densityClass = block.durationMinutes <= 45 ? ' is-compact' : block.durationMinutes <= 75 ? ' is-short' : '';
-  const article = makeElement('article', `execution-block is-${block.source}${densityClass}${risk?.risky ? ' is-risk' : ''}`);
-  article.draggable = true;
-  article.dataset.blockId = block.id;
-  article.dataset.taskId = task.id;
-  article.dataset.date = block.date;
-  article.dataset.startMinute = String(block.startMinute);
-  article.dataset.durationMinutes = String(block.durationMinutes);
-  article.dataset.source = block.source;
-  article.style.top = `${top}px`;
-  article.style.height = `${height}px`;
-  article.setAttribute('aria-label', `${task.title}，${Execution.formatMinute(block.startMinute)}，${block.durationMinutes} 分钟，${block.source === 'manual' ? '已锁定' : '自动安排'}`);
+function updateRunningClock() {
+  const entry = runningEntry();
+  if (!entry) return;
+  elements.runElapsed.textContent = elapsedClock(Worklog.durationSeconds(entry, new Date()));
+  const task = entry.taskId ? activeTasks().find((item) => item.id === entry.taskId) : null;
+  const total = entry.taskId
+    ? Worklog.actualMinutesForTask(state.store, entry.taskId, { now: new Date() })
+    : 0;
+  const segments = entry.taskId
+    ? Worklog.entriesForTask(state.store, entry.taskId).length
+    : 1;
+  elements.runSegments.textContent = task
+    ? `第 ${segments} 段 · 累计 ${humanMinutes(total)}`
+    : '自由计时';
+}
 
-  const heading = makeElement('div', 'execution-block-heading');
-  const time = makeElement('span', 'execution-block-time', `${Execution.formatMinute(block.startMinute)} · ${block.durationMinutes} 分`);
-  const badges = makeElement('span', 'execution-block-badges');
-  if (task.top3Date === block.date) badges.appendChild(makeElement('b', 'execution-top3', '★ Top3'));
-  if (task.flagged) badges.appendChild(makeElement('b', 'execution-flag', '⚑'));
-  if (risk?.risky) badges.appendChild(makeElement('b', 'execution-risk', '期限风险'));
-  heading.append(time, badges);
-  const title = makeElement('strong', 'execution-block-title', task.title);
-  title.title = task.title;
-  article.append(heading, title);
-  const meta = makeElement('span', 'execution-block-meta', `${actual ? `实际 ${actual} 分 · ` : ''}${block.source === 'manual' ? '手动锁定' : '自动安排'}`);
-  article.appendChild(meta);
+function renderRunStrip() {
+  const entry = runningEntry();
+  clearInterval(runTicker);
+  runTicker = null;
+  elements.runStrip.hidden = !entry;
+  if (!entry) return;
+  const task = entry.taskId ? activeTasks().find((item) => item.id === entry.taskId) : null;
+  elements.runTaskTitle.textContent = task?.title || (entry.taskId ? '已移除的任务' : '自由计时');
+  elements.runComplete.hidden = !task;
+  updateRunningClock();
+  runTicker = setInterval(updateRunningClock, 1000);
+}
 
-  const actions = makeElement('div', 'execution-block-actions');
-  const focus = makeElement('button', '', '专注');
-  focus.type = 'button';
-  focus.dataset.executionAction = 'focus';
-  const manual = makeElement('button', '', '补录');
-  manual.type = 'button';
-  manual.dataset.executionAction = 'manual-time';
-  actions.append(focus, manual);
-  if (block.source === 'manual') {
-    const unlock = makeElement('button', '', '撤销锁定');
-    unlock.type = 'button';
-    unlock.dataset.executionAction = 'unlock';
-    actions.appendChild(unlock);
-    const resize = makeElement('span', 'execution-resize-handle');
-    resize.dataset.executionAction = 'resize';
-    resize.title = '拖动调整时长';
-    resize.setAttribute('aria-label', '拖动调整时长');
-    article.appendChild(resize);
+function worklogDates() {
+  const date = state.worklogDate || todayDate();
+  return state.worklogMode === 'week' ? Worklog.weekDates(date) : [date];
+}
+
+function renderWorklogSegment(segment, date) {
+  // Vertical placement belongs to the caller, which knows what sits above.
+  const height = Math.max(WORKLOG_MIN_BLOCK_HEIGHT, segment.minutes * WORKLOG_PIXELS_PER_MINUTE);
+  const compact = height < 40;
+  const block = makeElement('article', `worklog-segment${segment.running ? ' is-running' : ''}${compact ? ' is-compact' : ''}${segment.taskDeleted ? ' is-orphan' : ''}`);
+  block.style.height = `${height}px`;
+  block.dataset.taskId = segment.taskId || '';
+  block.dataset.entryId = segment.id;
+  block.dataset.date = date;
+  // Colour comes from the task id so the same task keeps one hue all day and a
+  // split run reads as one thing interrupted rather than two unrelated blocks.
+  block.style.setProperty('--segment-hue', String(worklogHue(segment.taskId)));
+  block.appendChild(makeElement('strong', 'worklog-segment-title', segment.title));
+  const range = `${Worklog.formatMinute(segment.startMinute)}–${segment.running ? '进行中' : Worklog.formatMinute(segment.endMinute)}`;
+  block.appendChild(makeElement('small', 'worklog-segment-meta', `${range} · ${segment.minutes} 分`));
+  block.title = `${segment.title} ${range}（${segment.minutes} 分钟）`;
+  block.setAttribute('aria-label', `${segment.title}，${range}，${segment.minutes} 分钟`);
+  return block;
+}
+
+// A stable hue per task, so colours survive reloads and never depend on order.
+function worklogHue(taskId) {
+  if (!taskId) return 210;
+  let hash = 0;
+  for (let index = 0; index < taskId.length; index += 1) {
+    hash = (hash * 31 + taskId.charCodeAt(index)) % 360;
   }
-  article.appendChild(actions);
-  return article;
+  return hash;
 }
 
-function renderExecution() {
-  const date = state.executionDate || todayDate();
-  state.executionDate = date;
-  elements.executionDate.value = date;
-  document.querySelectorAll('[data-execution-mode]').forEach((button) => {
-    const active = button.dataset.executionMode === state.executionMode;
+function renderWorklog() {
+  const date = state.worklogDate || todayDate();
+  state.worklogDate = date;
+  elements.worklogDate.value = date;
+  document.querySelectorAll('[data-worklog-mode]').forEach((button) => {
+    const active = button.dataset.worklogMode === state.worklogMode;
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-selected', String(active));
   });
-  const schedule = Execution.buildExecutionSchedule(state.store, {
-    date,
-    mode: state.executionMode,
-    today: todayDate(),
-  });
-  const totalMinutes = schedule.blocks.reduce((total, block) => total + block.durationMinutes, 0);
-  const manualMinutes = schedule.blocks.filter((block) => block.source === 'manual')
-    .reduce((total, block) => total + block.durationMinutes, 0);
-  const risks = activeTasks().filter((task) => !task.deletedAt && task.status !== 'completed')
-    .map((task) => Execution.riskForTask(state.store, task, { today: todayDate(), schedule: schedule.schedule }))
-    .filter((risk) => risk?.risky);
-  elements.executionSummary.replaceChildren(
-    makeElement('span', '', `${schedule.blocks.length} 个时间块`),
-    makeElement('span', '', `计划 ${totalMinutes} 分钟`),
-    makeElement('span', '', `已锁定 ${manualMinutes} 分钟`),
-    makeElement('span', risks.length ? 'is-risk' : '', risks.length ? `${risks.length} 项期限风险` : '期限容量正常'),
-  );
 
-  const fragment = document.createDocumentFragment();
-  const timeRail = makeElement('div', 'execution-time-rail');
-  timeRail.appendChild(makeElement('div', 'execution-time-rail-spacer'));
-  for (let hour = 0; hour <= 24; hour += 1) {
-    timeRail.appendChild(makeElement('span', '', `${String(hour).padStart(2, '0')}:00`));
+  const dates = worklogDates();
+  const now = new Date();
+  const range = Worklog.rangeSummary(state.store, dates, { now });
+  const single = dates.length === 1;
+  const summary = single ? range.byDate[dates[0]] : null;
+
+  elements.worklogRange.textContent = single
+    ? calendarDateLabel(dates[0])
+    : `${calendarDateLabel(dates[0])} – ${calendarDateLabel(dates[dates.length - 1])}`;
+
+  const metrics = [
+    ['累计处理', humanMinutes(range.minutes), true],
+    ['时段', `${range.segmentCount} 段`, false],
+  ];
+  if (single && summary) {
+    metrics.splice(1, 0, ['任务', `${summary.taskCount} 个`, false]);
+    if (summary.firstMinute !== null) {
+      metrics.push([
+        '最早 / 最晚',
+        `${Worklog.formatMinute(summary.firstMinute)} – ${Worklog.formatMinute(summary.lastMinute)}`,
+        false,
+      ]);
+      metrics.push(['其间未计时', humanMinutes(summary.idleMinutes), false]);
+    }
+  } else {
+    metrics.push(['有记录的天', `${range.activeDays} / ${dates.length}`, false]);
   }
-  fragment.appendChild(timeRail);
-  schedule.dates.forEach((day) => {
-    const column = makeElement('section', `execution-day${day === todayDate() ? ' is-today' : ''}`);
-    column.dataset.executionDate = day;
-    const holiday = Calendar.getChinaHoliday(day);
-    const heading = makeElement('header', 'execution-day-header');
-    heading.append(makeElement('strong', '', executionDateLabel(day)));
-    if (holiday) heading.appendChild(makeElement('span', holiday.type === 'makeup' ? 'is-makeup' : 'is-holiday', `${holiday.badge} ${holiday.name}`));
-    const dayMinutes = schedule.byDate[day].reduce((total, block) => total + block.durationMinutes, 0);
-    heading.appendChild(makeElement('small', dayMinutes > schedule.dailyCapacityMinutes ? 'is-overload' : '', `${dayMinutes}/${schedule.dailyCapacityMinutes} 分`));
-    const body = makeElement('div', 'execution-day-body');
-    body.dataset.executionDate = day;
-    for (let hour = 0; hour < 24; hour += 1) body.appendChild(makeElement('i', 'execution-hour-line'));
-    schedule.byDate[day].forEach((block) => body.appendChild(renderExecutionBlock(block, schedule)));
+  elements.worklogSummary.replaceChildren(...metrics.map(([label, value, highlight]) => {
+    const chip = makeElement('span', highlight ? 'is-highlight' : '');
+    chip.append(`${label} `, makeElement('strong', '', value));
+    return chip;
+  }));
+
+  const grid = makeElement('div', `worklog-grid${single ? ' is-single' : ''}`);
+  const rail = makeElement('div', 'worklog-rail');
+  for (let hour = WORKLOG_START_HOUR; hour <= WORKLOG_END_HOUR; hour += 1) {
+    const label = makeElement('span', '', `${String(hour).padStart(2, '0')}:00`);
+    label.style.top = `${(hour - WORKLOG_START_HOUR) * 60 * WORKLOG_PIXELS_PER_MINUTE}px`;
+    rail.appendChild(label);
+  }
+  grid.appendChild(rail);
+
+  const height = (WORKLOG_END_HOUR - WORKLOG_START_HOUR) * 60 * WORKLOG_PIXELS_PER_MINUTE;
+  rail.style.height = `${height}px`;
+
+  dates.forEach((day) => {
+    const column = makeElement('section', `worklog-day${day === todayDate() ? ' is-today' : ''}`);
+    const heading = makeElement('header', 'worklog-day-header');
+    heading.appendChild(makeElement('strong', '', calendarDateLabel(day)));
+    const dayMinutes = range.byDate[day]?.minutes || 0;
+    heading.appendChild(makeElement('small', '', dayMinutes ? humanMinutes(dayMinutes) : '未记录'));
+    const body = makeElement('div', 'worklog-day-body');
+    body.style.height = `${height}px`;
+    for (let hour = WORKLOG_START_HOUR; hour < WORKLOG_END_HOUR; hour += 1) {
+      const line = makeElement('i', 'worklog-hour-line');
+      line.style.top = `${(hour - WORKLOG_START_HOUR) * 60 * WORKLOG_PIXELS_PER_MINUTE}px`;
+      body.appendChild(line);
+    }
+    if (day === todayDate()) {
+      const marker = makeElement('i', 'worklog-now');
+      const minute = nowMinuteOfDay();
+      marker.style.top = `${(minute - WORKLOG_START_HOUR * 60) * WORKLOG_PIXELS_PER_MINUTE}px`;
+      body.appendChild(marker);
+    }
+    // Only one timer runs at a time, so segments never really overlap. They can
+    // still collide on screen, because a block has a minimum height that is
+    // taller than a short segment's true span. Pushing each one below the last
+    // keeps back-to-back stretches readable instead of stacked on top of a
+    // single blob.
+    let floor = 0;
+    (range.byDate[day]?.segments || []).forEach((segment) => {
+      const block = renderWorklogSegment(segment, day);
+      const natural = (segment.startMinute - WORKLOG_START_HOUR * 60) * WORKLOG_PIXELS_PER_MINUTE;
+      const top = Math.max(natural, floor);
+      block.style.top = `${top}px`;
+      floor = top + parseFloat(block.style.height) + 2;
+      body.appendChild(block);
+    });
+    if (!(range.byDate[day]?.segmentCount)) {
+      body.appendChild(makeElement('p', 'worklog-day-empty', '这天没有记录'));
+    }
     column.append(heading, body);
-    fragment.appendChild(column);
+    grid.appendChild(column);
   });
-  elements.executionCalendar.classList.toggle('is-day-mode', state.executionMode === 'day');
-  elements.executionCalendar.replaceChildren(fragment);
-  if (!elements.executionCalendarScroll.dataset.initialized) {
-    const earliestMinute = schedule.blocks.length
-      ? Math.min(EXECUTION_DEFAULT_SCROLL_MINUTE, ...schedule.blocks.map((block) => block.startMinute))
-      : EXECUTION_DEFAULT_SCROLL_MINUTE;
-    elements.executionCalendarScroll.scrollTop = 53 + Math.max(0, earliestMinute - 60);
-    elements.executionCalendarScroll.dataset.initialized = 'true';
+
+  // The rail is absolutely positioned against the shared scroll area, so the
+  // whole grid scrolls as one and the hours stay aligned with the blocks.
+  elements.worklogCalendar.replaceChildren(grid);
+
+  const rollupDates = single ? dates : [];
+  const rollup = rollupDates.length
+    ? Worklog.taskRollup(state.store, rollupDates[0], { now })
+    : [];
+  elements.worklogRollup.replaceChildren(...rollup.map((row) => {
+    const item = makeElement('div', 'worklog-rollup-row');
+    const bar = makeElement('span', 'worklog-rollup-bar');
+    bar.style.setProperty('--segment-hue', String(worklogHue(row.taskId)));
+    const title = makeElement('div', 'worklog-rollup-title', row.title);
+    title.appendChild(makeElement('small', '', row.segments
+      .map((segment) => `${Worklog.formatMinute(segment.startMinute)}–${segment.running ? '进行中' : Worklog.formatMinute(segment.endMinute)}`)
+      .join('　')));
+    item.append(
+      bar,
+      title,
+      makeElement('span', 'worklog-rollup-total', humanMinutes(row.minutes)),
+      makeElement('span', 'worklog-rollup-count', `${row.segments.length} 段`),
+    );
+    return item;
+  }));
+  elements.worklogRollup.hidden = !rollup.length;
+
+  if (!elements.worklogScroll.dataset.initialized) {
+    const earliest = range.segmentCount
+      ? Math.min(...dates.flatMap((day) => (range.byDate[day]?.segments || []).map((s) => s.startMinute)))
+      : WORKLOG_DEFAULT_SCROLL_MINUTE;
+    elements.worklogScroll.scrollTop = Math.max(0, (earliest - WORKLOG_START_HOUR * 60 - 30) * WORKLOG_PIXELS_PER_MINUTE);
+    elements.worklogScroll.dataset.initialized = 'true';
   }
-  renderFocusStrip();
 }
 
-async function moveExecutionBlock(block, date, startMinute) {
-  const task = activeTasks().find((item) => item.id === block.taskId && !item.deletedAt);
-  if (!task) return;
-  const patch = {};
-  if (!task.dueDate && date !== task.plannedDate) patch.plannedDate = date;
-  else if (date < task.plannedDate) patch.plannedDate = date;
-  if (task.dueDate && date > task.dueDate) patch.dueDate = date;
-  if (Object.keys(patch).length && !(await patchTask(task.id, patch, { undo: false, message: '任务日期范围已随排程调整' }))) return;
-  const blockId = block.source === 'manual' ? block.id : commandId('block');
-  const undo = block.source === 'manual'
-    ? {
-        type: 'upsertScheduleBlock',
-        taskId: task.id,
-        payload: {
-          blockId: block.id,
-          date: block.date,
-          startMinute: block.startMinute,
-          durationMinutes: block.durationMinutes,
-          locked: true,
-        },
-      }
-    : { type: 'deleteScheduleBlock', taskId: task.id, payload: { blockId } };
-  await dispatch({
-    type: 'upsertScheduleBlock',
-    taskId: task.id,
-    payload: {
-      blockId,
-      date,
-      startMinute,
-      durationMinutes: block.durationMinutes,
-      locked: true,
-    },
-  }, {
-    undo,
-    undoMessage: '已撤销手动排程',
-    message: `已锁定到 ${executionDateLabel(date)} ${Execution.formatMinute(startMinute)}`,
-  });
+function nowMinuteOfDay() {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: state.store?.meta?.timeZone || DAYMARK_TIME_ZONE,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return (Number(value.hour) % 24) * 60 + Number(value.minute);
 }
 
 function openManualTime(taskId, date = todayDate()) {
@@ -2133,8 +2220,236 @@ function openManualTime(taskId, date = todayDate()) {
   if (!elements.manualTimeDialog.open) elements.manualTimeDialog.showModal();
 }
 
+const CALENDAR_WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日'];
+const CALENDAR_PHASE_LABEL = { start: '开始', middle: '进行中', deadline: '截止' };
+
+function todoCalendarAnchor() {
+  return state.todoCalendarDate || todayDate();
+}
+
+// Every task landing on a date, straight from the scheduler that already knows
+// how a dated range spreads across China workdays.
+function todoCalendarDay(schedule, date) {
+  const tasks = new Map(activeTasks().map((task) => [task.id, task]));
+  const blocks = (schedule.byDate[date] || []).map((block) => {
+    const task = tasks.get(block.taskId);
+    if (!task) return null;
+    return {
+      task,
+      minutes: Number(block.scheduledMinutes) || 0,
+      phase: block.phase,
+      needsEstimate: Boolean(block.needsEstimate),
+      isPlanningDay: block.isPlanningDay !== false,
+    };
+  }).filter(Boolean);
+
+  // Tasks finished on this date are worth showing: the day is only legible if
+  // you can see what got done alongside what is left.
+  const completedHere = activeTasks().filter((task) => (
+    task.status === 'completed'
+    && dateInTimeZone(task.completedAt, state.store?.meta?.timeZone || DAYMARK_TIME_ZONE) === date
+    && !blocks.some((block) => block.task.id === task.id)
+  )).map((task) => ({
+    task, minutes: Number(task.estimateMinutes) || 0, phase: 'single', needsEstimate: false, isPlanningDay: true,
+  }));
+
+  return [...blocks, ...completedHere];
+}
+
+function todoCalendarCard(entry, date) {
+  const task = entry.task;
+  const done = task.status === 'completed';
+  const priority = task.priority === 'high' ? ' is-high' : task.priority === 'low' ? ' is-low' : '';
+  const card = makeElement('button', `calendar-card${priority}${task.top3Date === date ? ' is-top3' : ''}${done ? ' is-done' : ''}`);
+  card.type = 'button';
+  card.dataset.taskId = task.id;
+  card.dataset.date = date;
+  card.draggable = !done;
+  card.appendChild(makeElement('span', 'calendar-card-title', task.title));
+
+  const meta = makeElement('span', 'calendar-card-meta');
+  if (task.top3Date === date) meta.appendChild(makeElement('i', 'calendar-chip is-top3', '★ Top 3'));
+  // Phase and "needs an estimate" describe work still ahead, so a finished task
+  // shows neither — only that it is done, and how long it was expected to take.
+  if (!done && entry.phase && entry.phase !== 'single') {
+    meta.appendChild(makeElement('i', 'calendar-chip is-phase', CALENDAR_PHASE_LABEL[entry.phase]));
+  }
+  if (entry.minutes) meta.appendChild(makeElement('i', 'calendar-chip', `${entry.minutes} 分`));
+  else if (!done && entry.needsEstimate) meta.appendChild(makeElement('i', 'calendar-chip is-need', '待估时'));
+  if (done) meta.appendChild(makeElement('i', 'calendar-chip', '已完成'));
+  if (meta.childNodes.length) card.appendChild(meta);
+
+  card.title = `${task.title}${entry.minutes ? ` · ${entry.minutes} 分钟` : ''}`;
+  return card;
+}
+
+function renderTodoCalendarWeek(schedule) {
+  const anchor = todoCalendarAnchor();
+  const dates = Worklog.weekDates(anchor);
+  const grid = makeElement('div', 'calendar-week');
+  let total = 0;
+  let count = 0;
+
+  dates.forEach((date, index) => {
+    const entries = todoCalendarDay(schedule, date);
+    const used = entries.reduce((sum, entry) => sum + entry.minutes, 0);
+    const holiday = Calendar.getChinaHoliday(date);
+    const workday = Planning.isChinaWorkday(date);
+    total += used;
+    count += entries.length;
+
+    const column = makeElement('section', `calendar-day${date === todayDate() ? ' is-today' : ''}${workday ? '' : ' is-rest'}`);
+    column.dataset.date = date;
+
+    const head = makeElement('header', 'calendar-day-head');
+    const name = makeElement('div', 'calendar-day-name');
+    name.append(
+      makeElement('b', '', `周${CALENDAR_WEEKDAYS[index]}`),
+      makeElement('span', '', String(Number(date.slice(8, 10)))),
+    );
+    head.appendChild(name);
+    if (holiday) {
+      head.appendChild(makeElement('span', `calendar-day-badge is-${holiday.type === 'makeup' ? 'makeup' : 'holiday'}`, holiday.name));
+    }
+    if (used > 0) {
+      const capacity = schedule.dailyCapacityMinutes || 480;
+      const over = used > capacity;
+      const cap = makeElement('div', 'calendar-cap');
+      const track = makeElement('div', 'calendar-cap-track');
+      const fill = makeElement('div', `calendar-cap-fill${over ? ' is-over' : ''}`);
+      fill.style.width = `${Math.min(100, (used / capacity) * 100)}%`;
+      track.appendChild(fill);
+      cap.append(track, makeElement('span', `calendar-cap-text${over ? ' is-over' : ''}`, `${used} / ${capacity} 分${over ? ' · 超载' : ''}`));
+      head.appendChild(cap);
+    }
+    column.appendChild(head);
+
+    const body = makeElement('div', 'calendar-day-body');
+    body.dataset.dropDate = date;
+    if (!entries.length) {
+      body.appendChild(makeElement('p', 'calendar-day-empty', workday ? '没有安排' : '休息'));
+    }
+    entries.forEach((entry) => body.appendChild(todoCalendarCard(entry, date)));
+    column.appendChild(body);
+    grid.appendChild(column);
+  });
+
+  elements.todoCalendarRange.textContent = `${formatShortDate(dates[0])} – ${formatShortDate(dates[6])}`;
+  elements.todoCalendarSummary.textContent = count
+    ? `本周 ${count} 件待办 · 已排 ${humanMinutes(total)}`
+    : '本周还没有安排';
+  return grid;
+}
+
+function renderTodoCalendarMonth(schedule) {
+  const anchor = todoCalendarAnchor();
+  const year = Number(anchor.slice(0, 4));
+  const month = Number(anchor.slice(5, 7));
+  const first = `${anchor.slice(0, 7)}-01`;
+  const offset = (new Date(`${first}T00:00:00Z`).getUTCDay() + 6) % 7;
+  const gridStart = addDays(first, -offset);
+
+  const wrap = makeElement('div', 'calendar-month-wrap');
+  const header = makeElement('div', 'calendar-weekday-row');
+  CALENDAR_WEEKDAYS.forEach((day) => header.appendChild(makeElement('span', '', day)));
+  const grid = makeElement('div', 'calendar-month');
+  let total = 0;
+  let count = 0;
+
+  for (let index = 0; index < 42; index += 1) {
+    const date = addDays(gridStart, index);
+    const inMonth = Number(date.slice(5, 7)) === month && Number(date.slice(0, 4)) === year;
+    const entries = todoCalendarDay(schedule, date);
+    const used = entries.reduce((sum, entry) => sum + entry.minutes, 0);
+    const holiday = Calendar.getChinaHoliday(date);
+    const workday = Planning.isChinaWorkday(date);
+    if (inMonth) { total += used; count += entries.length; }
+
+    const cell = makeElement('div', `calendar-cell${inMonth ? '' : ' is-outside'}${date === todayDate() ? ' is-today' : ''}${workday ? '' : ' is-rest'}`);
+    cell.dataset.dropDate = date;
+    const head = makeElement('div', 'calendar-cell-head');
+    head.appendChild(makeElement('span', 'calendar-cell-day', String(Number(date.slice(8, 10)))));
+    const capacity = schedule.dailyCapacityMinutes || 480;
+    const dot = holiday
+      ? (holiday.type === 'makeup' ? 'is-makeup' : 'is-holiday')
+      : used > capacity ? 'is-over' : '';
+    if (dot) head.appendChild(makeElement('i', `calendar-cell-dot ${dot}`));
+    cell.appendChild(head);
+
+    entries.slice(0, 3).forEach((entry) => {
+      const line = makeElement('button', `calendar-line${entry.task.top3Date === date ? ' is-top3' : ''}${entry.task.status === 'completed' ? ' is-done' : ''}`);
+      line.type = 'button';
+      line.dataset.taskId = entry.task.id;
+      line.dataset.date = date;
+      line.draggable = entry.task.status !== 'completed';
+      const priority = entry.task.priority === 'high' ? ' is-high' : entry.task.priority === 'low' ? ' is-low' : '';
+      line.appendChild(makeElement('i', `calendar-line-bar${priority}`));
+      line.appendChild(makeElement('span', '', entry.task.title));
+      line.title = entry.task.title + (entry.minutes ? ` · ${entry.minutes} 分钟` : '');
+      cell.appendChild(line);
+    });
+    if (entries.length > 3) {
+      cell.appendChild(makeElement('span', 'calendar-more', `+${entries.length - 3} 更多`));
+    }
+    grid.appendChild(cell);
+  }
+
+  wrap.append(header, grid);
+  elements.todoCalendarRange.textContent = `${year} 年 ${month} 月`;
+  elements.todoCalendarSummary.textContent = count
+    ? `本月 ${count} 件待办 · 已排 ${humanMinutes(total)}`
+    : '本月还没有安排';
+  return wrap;
+}
+
+function renderTodoCalendar() {
+  state.todoCalendarDate = todoCalendarAnchor();
+  document.querySelectorAll('[data-calendar-mode]').forEach((button) => {
+    const active = button.dataset.calendarMode === state.calendarMode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  const schedule = Planning.buildSchedule(state.store, { today: todayDate() });
+  elements.todoCalendarBody.replaceChildren(
+    state.calendarMode === 'week'
+      ? renderTodoCalendarWeek(schedule)
+      : renderTodoCalendarMonth(schedule),
+  );
+}
+
+// Dropping a task on another day moves it there. A task with a deadline keeps
+// its span: the whole range shifts, so dragging never silently compresses the
+// window someone allowed for the work.
+async function moveTaskToDate(taskId, date) {
+  const task = activeTasks().find((item) => item.id === taskId && !item.deletedAt);
+  if (!task || !date || task.status === 'completed') return;
+  const from = task.plannedDate;
+  if (from === date) return;
+
+  const patch = { plannedDate: date };
+  if (task.dueDate && from) {
+    const span = daysBetween(from, task.dueDate);
+    patch.dueDate = addDays(date, span);
+  } else if (task.dueDate && task.dueDate < date) {
+    patch.dueDate = date;
+  }
+
+  // Moving a task off its day invalidates a Top 3 marker pinned to that day.
+  // The domain clears it either way; saying so keeps the change from looking
+  // like the marker was lost by accident.
+  const losesTop3 = Boolean(task.top3Date) && task.top3Date !== date;
+  const spanNote = patch.dueDate && patch.dueDate !== task.dueDate ? ' · 期限一并顺延' : '';
+  await patchTask(taskId, patch, {
+    message: `已改期到 ${formatShortDate(date)}${spanNote}${losesTop3 ? ' · Top 3 标记已移除' : ''}`,
+  });
+}
+
+function daysBetween(from, to) {
+  return Math.round((new Date(`${to}T00:00:00Z`) - new Date(`${from}T00:00:00Z`)) / 86_400_000);
+}
+
 function renderDebugState() {
-  const visible = ['review', 'execution', 'focus'].includes(state.view)
+  const visible = ['review', 'worklog', 'calendar', 'focus'].includes(state.view)
     ? []
     : visibleTasks(activeTasks(), state.view, state.query, todayDate());
   const payload = {
@@ -2162,11 +2477,13 @@ function render() {
   if (!state.store) return;
   const reviewing = state.view === 'review';
   const focusing = state.view === 'focus';
-  const executing = state.view === 'execution';
-  elements.shell.classList.toggle('is-reviewing', reviewing || executing);
+  const logging = state.view === 'worklog';
+  const planning = state.view === 'calendar';
+  elements.shell.classList.toggle('is-reviewing', reviewing || logging || planning);
   elements.shell.classList.toggle('is-focusing', focusing);
-  elements.taskWorkspace.hidden = reviewing || executing || focusing;
-  elements.executionWorkspace.hidden = !executing;
+  elements.taskWorkspace.hidden = reviewing || logging || planning || focusing;
+  elements.worklogWorkspace.hidden = !logging;
+  elements.todoCalendarWorkspace.hidden = !planning;
   elements.reviewWorkspace.hidden = !reviewing;
   elements.focusWorkspace.hidden = !focusing;
   elements.detailsPanel.hidden = focusing;
@@ -2174,9 +2491,11 @@ function render() {
   renderSidebar();
   renderHeader();
   if (reviewing) renderReview();
-  else if (executing) renderExecution();
+  else if (logging) renderWorklog();
+  else if (planning) renderTodoCalendar();
   else if (!focusing) renderTaskList();
   renderFocus();
+  renderRunStrip();
   renderDetails();
   renderDebugState();
 }
@@ -2441,266 +2760,189 @@ elements.focusGoalSelect.addEventListener('change', () => {
   }, { selectedId: state.selectedId }));
 });
 
-document.querySelector('.execution-mode').addEventListener('click', (event) => {
-  const button = event.target.closest('[data-execution-mode]');
+document.querySelector('.worklog-mode').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-worklog-mode]');
   if (!button) return;
-  state.executionMode = button.dataset.executionMode;
-  renderExecution();
+  state.worklogMode = button.dataset.worklogMode;
+  delete elements.worklogScroll.dataset.initialized;
+  renderWorklog();
   renderDebugState();
 });
 
-elements.executionDate.addEventListener('change', () => {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(elements.executionDate.value)) return;
-  state.executionDate = elements.executionDate.value;
-  renderExecution();
+elements.worklogDate.addEventListener('change', () => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(elements.worklogDate.value)) return;
+  state.worklogDate = elements.worklogDate.value;
+  renderWorklog();
 });
 
-elements.executionPrevious.addEventListener('click', () => {
-  state.executionDate = addDays(state.executionDate || todayDate(), state.executionMode === 'day' ? -1 : -7);
-  renderExecution();
+elements.worklogPrevious.addEventListener('click', () => {
+  state.worklogDate = addDays(state.worklogDate || todayDate(), state.worklogMode === 'day' ? -1 : -7);
+  renderWorklog();
 });
 
-elements.executionNext.addEventListener('click', () => {
-  state.executionDate = addDays(state.executionDate || todayDate(), state.executionMode === 'day' ? 1 : 7);
-  renderExecution();
+elements.worklogNext.addEventListener('click', () => {
+  state.worklogDate = addDays(state.worklogDate || todayDate(), state.worklogMode === 'day' ? 1 : 7);
+  renderWorklog();
 });
 
-elements.executionToday.addEventListener('click', () => {
-  state.executionDate = todayDate();
-  renderExecution();
+elements.worklogToday.addEventListener('click', () => {
+  state.worklogDate = todayDate();
+  renderWorklog();
 });
 
-elements.executionCalendar.addEventListener('dragstart', (event) => {
-  const article = event.target.closest('.execution-block');
-  if (!article || event.target.closest('.execution-resize-handle')) return;
-  draggedExecutionBlock = {
-    id: article.dataset.blockId,
-    taskId: article.dataset.taskId,
-    date: article.dataset.date,
-    startMinute: Number(article.dataset.startMinute),
-    durationMinutes: Number(article.dataset.durationMinutes),
-    source: article.dataset.source,
-  };
-  article.classList.add('is-dragging');
+elements.worklogCalendar.addEventListener('click', (event) => {
+  const segment = event.target.closest('.worklog-segment');
+  if (!segment || !segment.dataset.taskId) return;
+  selectTask(segment.dataset.taskId);
+});
+
+// --- Todo calendar ---
+
+document.querySelector('.calendar-mode').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-calendar-mode]');
+  if (!button) return;
+  state.calendarMode = button.dataset.calendarMode;
+  renderTodoCalendar();
+  renderHeader();
+  renderDebugState();
+});
+
+elements.todoCalendarPrevious.addEventListener('click', () => {
+  state.todoCalendarDate = state.calendarMode === 'week'
+    ? addDays(todoCalendarAnchor(), -7)
+    : shiftMonth(todoCalendarAnchor(), -1);
+  renderTodoCalendar();
+});
+
+elements.todoCalendarNext.addEventListener('click', () => {
+  state.todoCalendarDate = state.calendarMode === 'week'
+    ? addDays(todoCalendarAnchor(), 7)
+    : shiftMonth(todoCalendarAnchor(), 1);
+  renderTodoCalendar();
+});
+
+elements.todoCalendarToday.addEventListener('click', () => {
+  state.todoCalendarDate = todayDate();
+  renderTodoCalendar();
+});
+
+function shiftMonth(date, delta) {
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(5, 7)) - 1 + delta;
+  const target = new Date(Date.UTC(year, month, 1));
+  return target.toISOString().slice(0, 10);
+}
+
+elements.todoCalendarBody.addEventListener('click', (event) => {
+  const card = event.target.closest('[data-task-id]');
+  if (!card) return;
+  state.view = 'calendar';
+  selectTask(card.dataset.taskId);
+});
+
+elements.todoCalendarBody.addEventListener('dragstart', (event) => {
+  const card = event.target.closest('[data-task-id]');
+  if (!card || card.draggable === false) return;
+  draggedCalendarTask = { taskId: card.dataset.taskId, from: card.dataset.date };
+  card.classList.add('is-dragging');
   event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData('text/plain', article.dataset.blockId);
+  // Firefox refuses to start a drag without payload; the id is the payload.
+  event.dataTransfer.setData('text/plain', card.dataset.taskId);
 });
 
-elements.executionCalendar.addEventListener('dragend', (event) => {
-  event.target.closest('.execution-block')?.classList.remove('is-dragging');
-  draggedExecutionBlock = null;
-  elements.executionCalendar.querySelectorAll('.is-drop-target').forEach((item) => item.classList.remove('is-drop-target'));
+elements.todoCalendarBody.addEventListener('dragend', (event) => {
+  event.target.closest('[data-task-id]')?.classList.remove('is-dragging');
+  draggedCalendarTask = null;
+  elements.todoCalendarBody.querySelectorAll('.is-drop-target')
+    .forEach((item) => item.classList.remove('is-drop-target'));
 });
 
-elements.executionCalendar.addEventListener('dragover', (event) => {
-  const body = event.target.closest('.execution-day-body');
-  if (!body || !draggedExecutionBlock) return;
+elements.todoCalendarBody.addEventListener('dragover', (event) => {
+  const target = event.target.closest('[data-drop-date]');
+  if (!target || !draggedCalendarTask) return;
   event.preventDefault();
   event.dataTransfer.dropEffect = 'move';
-  elements.executionCalendar.querySelectorAll('.is-drop-target').forEach((item) => item.classList.toggle('is-drop-target', item === body));
+  elements.todoCalendarBody.querySelectorAll('.is-drop-target')
+    .forEach((item) => item.classList.toggle('is-drop-target', item === target));
 });
 
-elements.executionCalendar.addEventListener('drop', (event) => {
-  const body = event.target.closest('.execution-day-body');
-  if (!body || !draggedExecutionBlock) return;
+elements.todoCalendarBody.addEventListener('drop', (event) => {
+  const target = event.target.closest('[data-drop-date]');
+  if (!target || !draggedCalendarTask) return;
   event.preventDefault();
-  const rect = body.getBoundingClientRect();
-  const raw = Math.round((event.clientY - rect.top) / 15) * 15;
-  const startMinute = Math.max(EXECUTION_DAY_START_MINUTE, Math.min(EXECUTION_DAY_END_MINUTE - draggedExecutionBlock.durationMinutes, raw));
-  const block = { ...draggedExecutionBlock };
-  draggedExecutionBlock = null;
-  runAction(moveExecutionBlock(block, body.dataset.executionDate, startMinute));
+  const drag = draggedCalendarTask;
+  draggedCalendarTask = null;
+  elements.todoCalendarBody.querySelectorAll('.is-drop-target')
+    .forEach((item) => item.classList.remove('is-drop-target'));
+  runAction(moveTaskToDate(drag.taskId, target.dataset.dropDate));
 });
 
-elements.executionCalendar.addEventListener('click', (event) => {
-  const article = event.target.closest('.execution-block');
-  if (!article) return;
-  const action = event.target.closest('[data-execution-action]')?.dataset.executionAction;
-  const taskId = article.dataset.taskId;
-  if (action === 'focus') {
-    runAction(dispatch({ type: 'startFocus', taskId, payload: { entryId: commandId('time') } }, { message: '已开始专注计时' }));
-  } else if (action === 'manual-time') {
-    openManualTime(taskId, article.dataset.date);
-  } else if (action === 'unlock') {
-    const blockId = article.dataset.blockId;
-    runAction(dispatch({ type: 'deleteScheduleBlock', taskId, payload: { blockId } }, {
-      message: '已撤销锁定，任务将重新自动安排',
-    }));
+// --- Task timing: start, pause, resume ---
+
+async function startTaskTimer(taskId) {
+  const task = activeTasks().find((item) => item.id === taskId && !item.deletedAt);
+  if (!task || task.status === 'completed') return;
+  const running = runningEntry();
+  if (running) {
+    // Only one thing can be timed at once, so switching tasks closes the old
+    // run first rather than silently dropping it.
+    if (running.taskId === taskId) return;
+    await dispatch({
+      type: 'stopFocus',
+      taskId: running.taskId,
+      payload: { entryId: running.id },
+    }, { selectedId: state.selectedId });
   }
-});
-
-elements.executionCalendar.addEventListener('pointerdown', (event) => {
-  const handle = event.target.closest('.execution-resize-handle');
-  const article = event.target.closest('.execution-block');
-  if (!handle || !article) return;
-  event.preventDefault();
-  article.draggable = false;
-  resizingExecutionBlock = {
-    article,
-    pointerId: event.pointerId,
-    startY: event.clientY,
-    initialDuration: Number(article.dataset.durationMinutes),
-    id: article.dataset.blockId,
-    taskId: article.dataset.taskId,
-    date: article.dataset.date,
-    startMinute: Number(article.dataset.startMinute),
-  };
-  handle.setPointerCapture?.(event.pointerId);
-  article.classList.add('is-resizing');
-});
-
-elements.executionCalendar.addEventListener('pointerdown', (event) => {
-  const article = event.target.closest('.execution-block');
-  if (!article || event.target.closest('button, .execution-resize-handle')) return;
-  event.preventDefault();
-  article.draggable = false;
-  article.setPointerCapture?.(event.pointerId);
-  pointerDraggingExecutionBlock = {
-    article,
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
-    lastX: event.clientX,
-    lastY: event.clientY,
-    startScrollTop: elements.executionCalendarScroll.scrollTop,
-    moved: false,
-    id: article.dataset.blockId,
-    taskId: article.dataset.taskId,
-    date: article.dataset.date,
-    startMinute: Number(article.dataset.startMinute),
-    durationMinutes: Number(article.dataset.durationMinutes),
-    source: article.dataset.source,
-  };
-});
-
-function stopExecutionAutoScroll() {
-  executionAutoScrollVelocity = 0;
-  if (executionAutoScrollFrame !== null) cancelAnimationFrame(executionAutoScrollFrame);
-  executionAutoScrollFrame = null;
-}
-
-function renderPointerDragTransform(drag) {
-  const scrollDelta = elements.executionCalendarScroll.scrollTop - drag.startScrollTop;
-  drag.article.style.transform = `translate(${drag.lastX - drag.startX}px, ${drag.lastY - drag.startY + scrollDelta}px)`;
-}
-
-function runExecutionAutoScroll() {
-  const drag = pointerDraggingExecutionBlock;
-  if (!drag || !executionAutoScrollVelocity) {
-    stopExecutionAutoScroll();
-    return;
-  }
-  const before = elements.executionCalendarScroll.scrollTop;
-  elements.executionCalendarScroll.scrollTop += executionAutoScrollVelocity;
-  if (elements.executionCalendarScroll.scrollTop === before) {
-    stopExecutionAutoScroll();
-    return;
-  }
-  renderPointerDragTransform(drag);
-  executionAutoScrollFrame = requestAnimationFrame(runExecutionAutoScroll);
-}
-
-function updateExecutionAutoScroll(clientY) {
-  const rect = elements.executionCalendarScroll.getBoundingClientRect();
-  const edge = Math.min(72, rect.height / 4);
-  let velocity = 0;
-  if (clientY < rect.top + edge) velocity = -Math.min(18, Math.max(4, Math.ceil((rect.top + edge - clientY) / 4)));
-  if (clientY > rect.bottom - edge) velocity = Math.min(18, Math.max(4, Math.ceil((clientY - (rect.bottom - edge)) / 4)));
-  executionAutoScrollVelocity = velocity;
-  if (!velocity) {
-    stopExecutionAutoScroll();
-  } else if (executionAutoScrollFrame === null) {
-    executionAutoScrollFrame = requestAnimationFrame(runExecutionAutoScroll);
-  }
-}
-
-document.addEventListener('pointermove', (event) => {
-  const drag = pointerDraggingExecutionBlock;
-  if (!drag || event.pointerId !== drag.pointerId) return;
-  drag.lastX = event.clientX;
-  drag.lastY = event.clientY;
-  const x = event.clientX - drag.startX;
-  const y = event.clientY - drag.startY;
-  if (!drag.moved && Math.hypot(x, y) < 5) return;
-  drag.moved = true;
-  drag.article.classList.add('is-dragging');
-  renderPointerDragTransform(drag);
-  updateExecutionAutoScroll(event.clientY);
-});
-
-document.addEventListener('pointerup', (event) => {
-  const drag = pointerDraggingExecutionBlock;
-  if (!drag || event.pointerId !== drag.pointerId) return;
-  stopExecutionAutoScroll();
-  pointerDraggingExecutionBlock = null;
-  drag.article.draggable = true;
-  drag.article.classList.remove('is-dragging');
-  drag.article.style.transform = '';
-  if (!drag.moved) return;
-  const body = document.elementFromPoint(event.clientX, event.clientY)?.closest('.execution-day-body');
-  if (!body) return;
-  const rect = body.getBoundingClientRect();
-  const raw = Math.round((event.clientY - rect.top) / 15) * 15;
-  const startMinute = Math.max(EXECUTION_DAY_START_MINUTE, Math.min(EXECUTION_DAY_END_MINUTE - drag.durationMinutes, raw));
-  runAction(moveExecutionBlock(drag, body.dataset.executionDate, startMinute));
-});
-
-document.addEventListener('pointermove', (event) => {
-  if (!resizingExecutionBlock) return;
-  const delta = Math.round((event.clientY - resizingExecutionBlock.startY) / 15) * 15;
-  const max = EXECUTION_DAY_END_MINUTE - resizingExecutionBlock.startMinute;
-  const duration = Math.max(15, Math.min(max, resizingExecutionBlock.initialDuration + delta));
-  resizingExecutionBlock.nextDuration = duration;
-  resizingExecutionBlock.article.style.height = `${Math.max(38, duration)}px`;
-  resizingExecutionBlock.article.querySelector('.execution-block-time').textContent = `${Execution.formatMinute(resizingExecutionBlock.startMinute)} · ${duration} 分`;
-});
-
-document.addEventListener('pointerup', (event) => {
-  if (!resizingExecutionBlock || event.pointerId !== resizingExecutionBlock.pointerId) return;
-  const resize = resizingExecutionBlock;
-  resizingExecutionBlock = null;
-  resize.article.draggable = true;
-  resize.article.classList.remove('is-resizing');
-  const durationMinutes = resize.nextDuration || resize.initialDuration;
-  if (durationMinutes === resize.initialDuration) return;
-  runAction(dispatch({
-    type: 'upsertScheduleBlock',
-    taskId: resize.taskId,
-    payload: {
-      blockId: resize.id,
-      date: resize.date,
-      startMinute: resize.startMinute,
-      durationMinutes,
-      locked: true,
-    },
+  state.lastTimedTaskId = taskId;
+  await dispatch({
+    type: 'startFocus',
+    taskId,
+    payload: { entryId: commandId('time') },
   }, {
-    undo: {
-      type: 'upsertScheduleBlock',
-      taskId: resize.taskId,
-      payload: {
-        blockId: resize.id,
-        date: resize.date,
-        startMinute: resize.startMinute,
-        durationMinutes: resize.initialDuration,
-        locked: true,
-      },
-    },
-    undoMessage: '已恢复原排程时长',
-    message: `排程时长已调整为 ${durationMinutes} 分钟`,
-  }));
+    selectedId: state.selectedId,
+    message: running ? `已切换到「${task.title}」` : '开始处理',
+  });
+}
+
+async function pauseTaskTimer() {
+  const running = runningEntry();
+  if (!running) return;
+  await dispatch({
+    type: 'stopFocus',
+    taskId: running.taskId,
+    payload: { entryId: running.id },
+  }, { selectedId: state.selectedId, message: '已暂停，这段时间已记录' });
+}
+
+// A run left open overnight is closed at the end of the day it belongs to, so a
+// forgotten timer cannot log the small hours as work.
+async function settleStaleRun() {
+  const stale = Worklog.staleRunningEntry(state.store, todayDate());
+  if (!stale) return;
+  try {
+    await dispatch({
+      type: 'stopFocus',
+      eventId: `stale-stop-${stale.id}`,
+      taskId: stale.taskId,
+      occurredAt: timeEntryDayEnd(stale, state.store?.meta?.timeZone || DAYMARK_TIME_ZONE),
+      payload: { entryId: stale.id },
+    }, { selectedId: state.selectedId });
+    showToast(`${stale.reportingDate} 有一段计时忘了暂停，已按当天 24:00 结束`, false);
+  } catch (error) {
+    console.error('Unable to settle a stale run:', error);
+  }
+}
+
+elements.runPause.addEventListener('click', () => {
+  const running = runningEntry();
+  if (running) runAction(pauseTaskTimer());
+  else if (state.lastTimedTaskId) runAction(startTaskTimer(state.lastTimedTaskId));
 });
 
-elements.stopFocus.addEventListener('click', () => {
-  const entry = Execution.activeFocusEntry(state.store);
-  if (entry) runAction(dispatch({ type: 'stopFocus', taskId: entry.taskId, payload: { entryId: entry.id } }, { message: '专注计时已暂停' }));
+elements.runComplete.addEventListener('click', () => {
+  const running = runningEntry();
+  if (running?.taskId) runAction(toggleTaskById(running.taskId));
 });
-
-elements.completeFocus.addEventListener('click', () => runAction((async () => {
-  const entry = Execution.activeFocusEntry(state.store);
-  if (!entry) return;
-  await dispatch({ type: 'stopFocus', taskId: entry.taskId, payload: { entryId: entry.id } });
-  await toggleTaskById(entry.taskId);
-})()));
 
 function saveManualTime() {
   const taskId = elements.manualTimeTaskId.value;
@@ -2780,6 +3022,8 @@ elements.taskList.addEventListener('click', (event) => {
   if (!row) return;
   const action = event.target.closest('[data-action]')?.dataset.action;
   if (action === 'toggle') runAction(toggleTaskById(row.dataset.taskId));
+  else if (action === 'start') runAction(startTaskTimer(row.dataset.taskId));
+  else if (action === 'pause') runAction(pauseTaskTimer());
   else if (action === 'focus') openFocusStart(row.dataset.taskId);
   else if (action === 'flag') {
     const task = activeTasks().find((item) => item.id === row.dataset.taskId);
@@ -3307,7 +3551,7 @@ document.addEventListener('keydown', (event) => {
   const nativeControl = Boolean(event.target.closest('button, input, textarea, select, a, [contenteditable="true"]'));
   if (modifier && event.key.toLowerCase() === 'n') {
     event.preventDefault();
-    if (['review', 'execution', 'focus'].includes(state.view)) {
+    if (['review', 'worklog', 'calendar', 'focus'].includes(state.view)) {
       state.view = 'inbox';
       state.selectedId = null;
       render();
@@ -3317,7 +3561,7 @@ document.addEventListener('keydown', (event) => {
   }
   if (modifier && event.key.toLowerCase() === 'f') {
     event.preventDefault();
-    if (['review', 'execution', 'focus'].includes(state.view)) state.view = 'all';
+    if (['review', 'worklog', 'calendar', 'focus'].includes(state.view)) state.view = 'all';
     render();
     elements.searchInput.focus();
     elements.searchInput.select();
@@ -3335,7 +3579,7 @@ document.addEventListener('keydown', (event) => {
     requestAnimationFrame(() => document.querySelector(`[data-task-id="${CSS.escape(closingTaskId)}"]`)?.focus());
     return;
   }
-  if (editable || nativeControl || ['review', 'execution', 'focus'].includes(state.view)) return;
+  if (editable || nativeControl || ['review', 'worklog', 'calendar', 'focus'].includes(state.view)) return;
   const tasks = visibleTasks(activeTasks(), state.view, state.query, todayDate());
   const currentIndex = tasks.findIndex((task) => task.id === state.selectedId);
   if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && tasks.length) {
@@ -3356,13 +3600,13 @@ document.addEventListener('keydown', (event) => {
 detailsOverlayQuery.addEventListener('change', renderDetails);
 
 bridge.onFocusNewTask(() => {
-  if (['review', 'execution'].includes(state.view)) state.view = 'inbox';
+  if (['review', 'worklog', 'calendar'].includes(state.view)) state.view = 'inbox';
   render();
   elements.taskInput.focus();
 });
 
 bridge.onFocusSearch(() => {
-  if (['review', 'execution'].includes(state.view)) state.view = 'all';
+  if (['review', 'worklog', 'calendar'].includes(state.view)) state.view = 'all';
   render();
   elements.searchInput.focus();
   elements.searchInput.select();

@@ -8,7 +8,7 @@
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daymark</title>
-    <link rel="stylesheet" href="./styles.css?v=7" />
+    <link rel="stylesheet" href="./styles.css?v=8" />
   </head>
   <body>
     <svg class="tree-sprite" width="0" height="0" aria-hidden="true">
@@ -123,7 +123,7 @@
         </nav>
 
         <div class="nav-divider"></div>
-        <nav class="nav-list" aria-label="专注、执行与回顾">
+        <nav class="nav-list" aria-label="专注、日历与回顾">
           <button class="nav-item" type="button" data-view="focus">
             <span class="nav-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M12 21v-6" /><path d="M12 15c-3.5 0-6-2.4-6-5.5C6 6.4 8.5 3 12 3s6 3.4 6 6.5c0 3.1-2.5 5.5-6 5.5z" /></svg>
@@ -131,11 +131,17 @@
             <span>专注</span>
             <span class="nav-count" id="focus-nav-count">0</span>
           </button>
-          <button class="nav-item" type="button" data-view="execution">
+          <button class="nav-item" type="button" data-view="calendar">
             <span class="nav-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3" /><path d="M8 3v4M16 3v4M4 10h16M8 14h3M13 14h3M8 17h5" /></svg>
+              <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5" /><path d="M8 3v4M16 3v4M3.5 10h17M7.5 13.5h4M7.5 16.5h7" /></svg>
             </span>
-            <span>执行日历</span>
+            <span>待办日历</span>
+          </button>
+          <button class="nav-item" type="button" data-view="worklog">
+            <span class="nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M5 4v16" /><rect x="8" y="5" width="11" height="4.5" rx="1.5" /><rect x="8" y="13" width="7" height="4.5" rx="1.5" /></svg>
+            </span>
+            <span>处理记录</span>
           </button>
           <button class="nav-item" type="button" data-view="review">
             <span class="nav-icon" aria-hidden="true">
@@ -172,6 +178,18 @@
             <kbd>⌘ F</kbd>
           </label>
         </header>
+
+        <section class="run-strip" id="run-strip" hidden aria-live="polite">
+          <span class="run-pulse" aria-hidden="true"></span>
+          <div class="run-copy">
+            <small>正在处理</small>
+            <strong id="run-task-title">—</strong>
+          </div>
+          <span class="run-segments" id="run-segments"></span>
+          <time class="run-elapsed" id="run-elapsed">00:00:00</time>
+          <button type="button" class="secondary-button" id="run-pause">暂停</button>
+          <button type="button" class="primary-button" id="run-complete">完成任务</button>
+        </section>
 
         <section class="workspace" id="task-workspace">
           <form class="quick-add" id="add-form">
@@ -318,48 +336,68 @@
           </div>
         </section>
 
-        <section class="execution-workspace" id="execution-workspace" hidden>
-          <div class="execution-heading">
+        <section class="calendar-workspace" id="todo-calendar-workspace" hidden>
+          <div class="calendar-heading">
             <div>
-              <span class="review-kicker">DAYMARK · EXECUTE</span>
-              <h2>把计划落到时间里</h2>
-              <p>虚线是自动安排；拖动后会变成实线并锁定。所有时间按中国时间记录。</p>
+              <span class="review-kicker">DAYMARK · PLAN</span>
+              <h2>哪天要做什么</h2>
+              <p id="todo-calendar-summary">跨期任务按中国工作日自动拆分；拖动任务卡可以改期。</p>
             </div>
-            <div class="execution-mode" role="tablist" aria-label="执行日历范围">
-              <button type="button" data-execution-mode="day" role="tab" aria-selected="false">日</button>
-              <button type="button" data-execution-mode="week" class="is-active" role="tab" aria-selected="true">周</button>
-            </div>
-          </div>
-
-          <section class="focus-strip" id="focus-strip" hidden aria-live="polite">
-            <span class="focus-pulse" aria-hidden="true"></span>
-            <div class="focus-copy">
-              <small>正在专注</small>
-              <strong id="focus-task-title">—</strong>
-            </div>
-            <time id="focus-elapsed">00:00:00</time>
-            <button type="button" class="secondary-button" id="stop-focus">暂停</button>
-            <button type="button" class="primary-button" id="complete-focus">完成任务</button>
-          </section>
-
-          <div class="execution-toolbar">
-            <div class="execution-date-nav">
-              <button type="button" class="icon-button" id="execution-previous" aria-label="上一周期">‹</button>
-              <input type="date" id="execution-date" aria-label="执行日历日期" />
-              <button type="button" class="icon-button" id="execution-next" aria-label="下一周期">›</button>
-              <button type="button" class="secondary-button" id="execution-today">回到今天</button>
-            </div>
-            <div class="execution-legend" aria-label="排程图例">
-              <span><i class="execution-legend-line is-auto"></i>自动安排</span>
-              <span><i class="execution-legend-line is-locked"></i>手动锁定</span>
-              <span><i class="execution-legend-line is-risk"></i>期限风险</span>
+            <div class="calendar-mode" role="tablist" aria-label="待办日历范围">
+              <button type="button" data-calendar-mode="week" class="is-active" role="tab" aria-selected="true">周</button>
+              <button type="button" data-calendar-mode="month" role="tab" aria-selected="false">月</button>
             </div>
           </div>
 
-          <div class="execution-summary" id="execution-summary"></div>
-          <div class="execution-calendar-scroll" id="execution-calendar-scroll">
-            <div class="execution-calendar" id="execution-calendar" aria-label="任务执行时间轴"></div>
+          <div class="calendar-toolbar">
+            <div class="calendar-date-nav">
+              <button type="button" class="icon-button" id="todo-calendar-previous" aria-label="上一个周期">‹</button>
+              <span class="calendar-range" id="todo-calendar-range"></span>
+              <button type="button" class="icon-button" id="todo-calendar-next" aria-label="下一个周期">›</button>
+              <button type="button" class="secondary-button" id="todo-calendar-today">回到今天</button>
+            </div>
+            <div class="calendar-legend" aria-label="图例">
+              <span><i class="calendar-legend-swatch is-top3"></i>Top 3</span>
+              <span><i class="calendar-legend-swatch is-holiday"></i>法定假日</span>
+              <span><i class="calendar-legend-swatch is-makeup"></i>调休上班</span>
+              <span><i class="calendar-legend-swatch is-over"></i>超出当日容量</span>
+            </div>
           </div>
+
+          <div class="calendar-body" id="todo-calendar-body"></div>
+        </section>
+
+        <section class="worklog-workspace" id="worklog-workspace" hidden>
+          <div class="worklog-heading">
+            <div>
+              <span class="review-kicker">DAYMARK · WORKLOG</span>
+              <h2>今天都做了什么</h2>
+              <p>每一块都是真实发生过的处理时段，空白处表示没有在计时。</p>
+            </div>
+            <div class="worklog-mode" role="tablist" aria-label="记录范围">
+              <button type="button" data-worklog-mode="day" class="is-active" role="tab" aria-selected="true">日</button>
+              <button type="button" data-worklog-mode="week" role="tab" aria-selected="false">周</button>
+            </div>
+          </div>
+
+          <div class="worklog-toolbar">
+            <div class="worklog-date-nav">
+              <button type="button" class="icon-button" id="worklog-previous" aria-label="上一个周期">‹</button>
+              <label class="sr-only" for="worklog-date">处理记录日期</label>
+              <input type="date" id="worklog-date" />
+              <span class="worklog-range" id="worklog-range"></span>
+              <button type="button" class="icon-button" id="worklog-next" aria-label="下一个周期">›</button>
+              <button type="button" class="secondary-button" id="worklog-today">回到今天</button>
+            </div>
+          </div>
+
+          <div class="worklog-summary" id="worklog-summary" aria-label="处理概览"></div>
+
+          <div class="worklog-scroll" id="worklog-scroll">
+            <div class="worklog-calendar" id="worklog-calendar" aria-label="处理时段"></div>
+          </div>
+
+          <div class="worklog-rollup" id="worklog-rollup" aria-label="按任务汇总" hidden></div>
         </section>
 
         <section class="review-workspace" id="review-workspace" hidden>
@@ -762,14 +800,14 @@
     </div>
 
     <pre id="app-debug-state" hidden aria-hidden="true"></pre>
-    <script src="./domain.js?v=4"></script>
+    <script src="./domain.js?v=5"></script>
     <script src="./focus.js?v=1"></script>
     <script src="./planning.js?v=3"></script>
-    <script src="./execution.js?v=3"></script>
+    <script src="./worklog.js?v=1"></script>
     <script src="./daily-planning.js?v=2"></script>
     <script src="./reporting.js?v=4"></script>
     <script src="./calendar.js?v=3"></script>
     <script src="./ai-report.js?v=3"></script>
-    <script src="./renderer.js?v=10"></script>
+    <script src="./renderer.js?v=11"></script>
   </body>
 </html>
