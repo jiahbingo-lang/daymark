@@ -2242,7 +2242,6 @@ function todoCalendarDay(schedule, date) {
       task,
       minutes: Number(block.scheduledMinutes) || 0,
       phase: block.phase,
-      needsEstimate: Boolean(block.needsEstimate),
       isPlanningDay: block.isPlanningDay !== false,
     };
   }).filter(Boolean);
@@ -2254,7 +2253,7 @@ function todoCalendarDay(schedule, date) {
     && dateInTimeZone(task.completedAt, state.store?.meta?.timeZone || DAYMARK_TIME_ZONE) === date
     && !blocks.some((block) => block.task.id === task.id)
   )).map((task) => ({
-    task, minutes: Number(task.estimateMinutes) || 0, phase: 'single', needsEstimate: false, isPlanningDay: true,
+    task, minutes: Number(task.estimateMinutes) || 0, phase: 'single', isPlanningDay: true,
   }));
 
   return [...blocks, ...completedHere];
@@ -2278,8 +2277,9 @@ function todoCalendarCard(entry, date) {
   if (!done && entry.phase && entry.phase !== 'single') {
     meta.appendChild(makeElement('i', 'calendar-chip is-phase', CALENDAR_PHASE_LABEL[entry.phase]));
   }
+  // A missing estimate is not worth a chip here: most tasks lack one, so the
+  // marker would sit on nearly every card and stop meaning anything.
   if (entry.minutes) meta.appendChild(makeElement('i', 'calendar-chip', `${entry.minutes} 分`));
-  else if (!done && entry.needsEstimate) meta.appendChild(makeElement('i', 'calendar-chip is-need', '待估时'));
   if (done) meta.appendChild(makeElement('i', 'calendar-chip', '已完成'));
   if (meta.childNodes.length) card.appendChild(meta);
 

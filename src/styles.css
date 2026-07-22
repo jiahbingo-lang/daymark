@@ -3677,7 +3677,18 @@ select:focus-visible {
 .run-copy strong { font-size: 13.5px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-segments { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .run-elapsed { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
-.run-strip button { height: 30px; padding: 0 14px; border-radius: 9px; font-size: 12.5px; cursor: pointer; }
+/* margin:0 resets the details-panel .secondary-button margin-top, which would
+   otherwise shove 暂停 below 完成任务 in this flex row. */
+.run-strip button {
+  display: inline-grid;
+  place-items: center;
+  height: 30px;
+  margin: 0;
+  padding: 0 14px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
 .run-strip .secondary-button { border: 1px solid var(--line); background: var(--panel-solid); color: var(--muted); }
 .run-strip .primary-button { border: 0; background: var(--accent); color: #fff; font-weight: 630; }
 
@@ -3799,7 +3810,6 @@ select:focus-visible {
 .calendar-chip { font-size: 9.5px; font-style: normal; padding: 0 5px; border-radius: 4px; background: rgba(50, 61, 49, 0.06); color: var(--muted); font-variant-numeric: tabular-nums; }
 .calendar-chip.is-top3 { background: rgba(71, 107, 82, 0.16); color: var(--accent-strong); font-weight: 640; }
 .calendar-chip.is-phase { background: rgba(107, 122, 143, 0.16); color: #6b7a8f; font-weight: 600; }
-.calendar-chip.is-need { background: rgba(163, 76, 67, 0.12); color: var(--danger); font-weight: 600; }
 
 .calendar-weekday-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; margin-bottom: 6px; }
 .calendar-weekday-row span { text-align: center; font-size: 10.5px; font-weight: 620; color: var(--faint); letter-spacing: 0.06em; }
