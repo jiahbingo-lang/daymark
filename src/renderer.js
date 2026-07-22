@@ -798,19 +798,23 @@ function buildTaskRow(task, options = {}) {
   if (state.view === 'today' && task.status === 'active') {
     row.classList.add('has-row-actions');
     const timing = runningEntry()?.taskId === task.id;
+    // Play and pause read at a glance and cost no width, which matters in a row
+    // that already carries a flag, a priority dot and delete.
     const timer = document.createElement('button');
     timer.type = 'button';
     timer.className = `timer-action${timing ? ' is-running' : ''}`;
     timer.dataset.action = timing ? 'pause' : 'start';
-    timer.setAttribute('aria-label', timing ? `暂停“${task.title}”的计时` : `开始处理“${task.title}”`);
+    const label = timing ? `暂停“${task.title}”的计时` : actualMinutes ? `继续处理“${task.title}”` : `开始处理“${task.title}”`;
+    timer.setAttribute('aria-label', label);
+    timer.title = timing ? '暂停' : actualMinutes ? '继续' : '开始';
     timer.appendChild(timing
-      ? createSvg([{ tag: 'rect', attrs: { x: '7', y: '5', width: '3.5', height: '14', rx: '1' } },
-                   { tag: 'rect', attrs: { x: '13.5', y: '5', width: '3.5', height: '14', rx: '1' } }])
-      : createSvg([{ attrs: { d: 'M8 5.5v13l11-6.5z' } }]));
-    timer.append(timing ? '暂停' : actualMinutes ? '继续' : '开始');
+      ? createSvg([{ tag: 'rect', attrs: { x: '7.5', y: '5.5', width: '3.5', height: '13', rx: '1.2' } },
+                   { tag: 'rect', attrs: { x: '13', y: '5.5', width: '3.5', height: '13', rx: '1.2' } }])
+      : createSvg([{ attrs: { d: 'M8.5 5.5v13l10.5-6.5z' } }]));
     row.appendChild(timer);
 
     if (!runningFocusSession()) {
+      row.classList.add('has-focus-action');
       const focusGo = document.createElement('button');
       focusGo.type = 'button';
       focusGo.className = 'focus-go-action';
@@ -2501,8 +2505,12 @@ function render() {
 }
 
 function plannedForNewTask() {
-  if (state.quickDate === 'today' || state.view === 'today') return todayDate();
-  if (state.quickDate === 'tomorrow' || state.view === 'upcoming') return tomorrowDate();
+  // An explicit pick wins over whatever the current view would imply. Choosing
+  // 明天 while looking at 今天 means tomorrow — the view is only the fallback.
+  if (state.quickDate === 'today') return todayDate();
+  if (state.quickDate === 'tomorrow') return tomorrowDate();
+  if (state.view === 'today') return todayDate();
+  if (state.view === 'upcoming') return tomorrowDate();
   return null;
 }
 

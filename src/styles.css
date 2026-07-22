@@ -3681,23 +3681,34 @@ select:focus-visible {
 .run-strip .secondary-button { border: 1px solid var(--line); background: var(--panel-solid); color: var(--muted); }
 .run-strip .primary-button { border: 0; background: var(--accent); color: #fff; font-weight: 630; }
 
+/* The row is a fixed grid, so every action needs its own declared column or the
+   last ones get crushed to a sliver. */
+.task-row.has-row-actions {
+  grid-template-columns: 28px minmax(0, 1fr) 28px 28px auto 28px;
+}
+
+.task-row.has-row-actions.has-focus-action {
+  grid-template-columns: 28px minmax(0, 1fr) 28px auto 28px auto 28px;
+}
+
 .timer-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 12px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 1px solid rgba(71, 107, 82, 0.3);
-  border-radius: 999px;
+  border-radius: 50%;
   background: transparent;
   color: var(--accent-strong);
-  font-size: 12px;
-  font-weight: 580;
   opacity: 0;
   cursor: pointer;
 }
 
-.timer-action svg { width: 12px; height: 12px; fill: currentColor; stroke: none; }
+.timer-action svg { width: 13px; height: 13px; fill: currentColor; stroke: none; }
+.timer-action:hover { border-color: var(--accent); background: var(--accent-soft); }
+/* A running timer stays visible without hover — it is the row's current state,
+   not an action you have to go looking for. */
 .timer-action.is-running { opacity: 1; border-color: var(--accent); background: var(--accent-soft); }
 .task-row:hover .timer-action,
 .task-row:focus-within .timer-action { opacity: 1; }
