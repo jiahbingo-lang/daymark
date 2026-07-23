@@ -453,6 +453,26 @@
     return new Date(guess.getTime() - zoneOffsetMinutes(guess, timeZone) * 60_000);
   }
 
+  // The instant `minute` minutes into the given local date. Used to place a
+  // backfilled time entry at the wall-clock moment it actually happened, rather
+  // than at the moment it was logged.
+  function zonedInstant(date, minute, timeZone) {
+    return new Date(zonedDayStart(date, timeZone).getTime() + Math.round(minute) * 60_000);
+  }
+
+  // Which minute of its local day an instant falls on.
+  function zoneMinuteOfDay(instant, timeZone) {
+    const date = toDate(instant);
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: normalizeTimeZone(timeZone),
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(date);
+    const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return (Number(value.hour) % 24) * 60 + Number(value.minute);
+  }
+
   // Midnight closing the day a time entry belongs to.
   function timeEntryDayEnd(entry, timeZone) {
     const started = toDate(entry?.startedAt);
@@ -853,6 +873,7 @@
       'startFocus',
       'stopFocus',
       'addManualTime',
+      'updateTimeEntry',
       'deleteTimeEntry',
     ];
     if (!supported.includes(command.type)) throw new Error(`Unsupported command: ${command.type}`);
@@ -1219,25 +1240,71 @@
       after = closeTimeEntry(existing, occurredDate, next.meta.timeZone);
       next.timeEntries = next.timeEntries.map((entry) => (entry.id === existing.id ? after : entry));
     } else if (command.type === 'addManualTime') {
-      const task = activeTaskById(next.tasks, taskId);
-      if (!task) throw new Error(`Task not found: ${taskId}`);
+      // taskId is optional: a backfilled stretch may be free timing with no task.
+      const linkedTaskId = normalizeOptionalText(taskId, 120);
+      if (linkedTaskId && !activeTaskById(next.tasks, linkedTaskId)) {
+        throw new Error(`Task not found: ${linkedTaskId}`);
+      }
       const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120)
         || makeId('time');
       if (next.timeEntries.some((entry) => entry.id === entryId)) throw new Error(`Time entry already exists: ${entryId}`);
       const date = normalizeDate(commandValue(command, 'date')) || dateInTimeZone(occurredDate, next.meta.timeZone);
       const minutes = normalizeInteger(commandValue(command, 'minutes'), { min: 1, max: 1440, fallback: null });
       if (minutes === null) throw new Error('Manual time must be between 1 and 1440 minutes');
+      // A start minute anchors the entry to a real wall-clock slot on the day it
+      // belongs to. Without one, the entry lands at the moment it was logged —
+      // kept only for older callers that pass duration alone.
+      const startMinute = normalizeInteger(commandValue(command, 'startMinute'), { min: 0, max: 1439, fallback: null });
+      const startedAt = startMinute === null ? occurredAt : zonedInstant(date, startMinute, next.meta.timeZone).toISOString();
+      const endedAt = startMinute === null ? occurredAt : new Date(new Date(startedAt).getTime() + minutes * 60_000).toISOString();
       after = sanitizeTimeEntry({
         id: entryId,
-        taskId: task.id,
-        startedAt: occurredAt,
-        endedAt: occurredAt,
+        taskId: linkedTaskId,
+        startedAt,
+        endedAt,
         durationSeconds: minutes * 60,
         reportingDate: date,
         source: 'manual',
         note: commandValue(command, 'note'),
       }, { timeZone: next.meta.timeZone });
       next.timeEntries.push(after);
+      taskId = linkedTaskId;
+    } else if (command.type === 'updateTimeEntry') {
+      const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120);
+      const existing = next.timeEntries.find((entry) => entry.id === entryId) || null;
+      if (!existing) throw new Error(`Time entry not found: ${entryId}`);
+      // A live run has no end to move; stop it before its times can be edited.
+      if (!existing.endedAt) throw new Error('Stop a running focus session before editing it');
+      const has = (field) => Object.prototype.hasOwnProperty.call(commandPayload(command), field);
+      const nextTaskId = has('taskId') ? normalizeOptionalText(commandValue(command, 'taskId'), 120) : existing.taskId;
+      if (nextTaskId && !activeTaskById(next.tasks, nextTaskId)) throw new Error(`Task not found: ${nextTaskId}`);
+      const date = normalizeDate(commandValue(command, 'date')) || existing.reportingDate;
+      const minutes = has('minutes')
+        ? normalizeInteger(commandValue(command, 'minutes'), { min: 1, max: 1440, fallback: null })
+        : Math.max(1, Math.round((Number(existing.durationSeconds) || 60) / 60));
+      if (minutes === null) throw new Error('Manual time must be between 1 and 1440 minutes');
+      const startMinute = has('startMinute')
+        ? normalizeInteger(commandValue(command, 'startMinute'), { min: 0, max: 1439, fallback: null })
+        : zoneMinuteOfDay(existing.startedAt, next.meta.timeZone);
+      const startedAt = startMinute === null
+        ? existing.startedAt
+        : zonedInstant(date, startMinute, next.meta.timeZone).toISOString();
+      const endedAt = new Date(new Date(startedAt).getTime() + minutes * 60_000).toISOString();
+      before = existing;
+      after = sanitizeTimeEntry({
+        ...existing,
+        taskId: nextTaskId,
+        startedAt,
+        endedAt,
+        durationSeconds: minutes * 60,
+        reportingDate: date,
+        // Editing turns a timed run into a manual record: its times are now
+        // user-asserted, not measured.
+        source: 'manual',
+        note: has('note') ? commandValue(command, 'note') : existing.note,
+      }, { timeZone: next.meta.timeZone });
+      next.timeEntries = next.timeEntries.map((entry) => (entry.id === existing.id ? after : entry));
+      taskId = nextTaskId;
     } else if (command.type === 'deleteTimeEntry') {
       const entryId = normalizeOptionalText(commandValue(command, 'entryId') || commandValue(command, 'id'), 120);
       const existing = next.timeEntries.find((entry) => entry.id === entryId) || null;

@@ -369,12 +369,27 @@ const elements = {
   confirmDailyShutdown: $('#confirm-daily-shutdown'),
   manualTimeDialog: $('#manual-time-dialog'),
   manualTimeForm: $('#manual-time-form'),
-  manualTimeTaskId: $('#manual-time-task-id'),
-  manualTimeTaskTitle: $('#manual-time-task-title'),
+  manualTimeSub: $('#manual-time-sub'),
+  manualTimeEntryId: $('#manual-time-entry-id'),
+  manualTimeTask: $('#manual-time-task'),
   manualTimeDate: $('#manual-time-date'),
+  manualTimeStart: $('#manual-time-start'),
+  manualTimeEnd: $('#manual-time-end'),
   manualTimeMinutes: $('#manual-time-minutes'),
+  manualTimeDuration: $('#manual-time-duration'),
+  manualTimeConflict: $('#manual-time-conflict'),
+  manualTimeConflictText: $('#manual-time-conflict-text'),
+  manualTimeBackdate: $('#manual-time-backdate'),
   manualTimeNote: $('#manual-time-note'),
+  manualTimeTitle: $('#manual-time-title'),
+  manualTimeHint: $('#manual-time-hint'),
+  modeTimed: $('#mode-timed'),
+  modeDuration: $('#mode-duration'),
+  backfillTimed: $('#backfill-timed'),
+  backfillDurationOnly: $('#backfill-duration-only'),
   saveManualTime: $('#save-manual-time'),
+  worklogBackfill: $('#worklog-backfill'),
+  segmentMenu: $('#segment-menu'),
   debugState: $('#app-debug-state'),
   focusNavCount: $('#focus-nav-count'),
   focusChip: $('#focus-chip'),
@@ -2046,7 +2061,8 @@ function renderWorklogSegment(segment, date) {
   // Vertical placement belongs to the caller, which knows what sits above.
   const height = Math.max(WORKLOG_MIN_BLOCK_HEIGHT, segment.minutes * WORKLOG_PIXELS_PER_MINUTE);
   const compact = height < 40;
-  const block = makeElement('article', `worklog-segment${segment.running ? ' is-running' : ''}${compact ? ' is-compact' : ''}${segment.taskDeleted ? ' is-orphan' : ''}`);
+  const manual = segment.source === 'manual';
+  const block = makeElement('article', `worklog-segment${segment.running ? ' is-running' : ''}${compact ? ' is-compact' : ''}${segment.taskDeleted ? ' is-orphan' : ''}${manual ? ' is-manual' : ''}`);
   block.style.height = `${height}px`;
   block.dataset.taskId = segment.taskId || '';
   block.dataset.entryId = segment.id;
@@ -2054,6 +2070,7 @@ function renderWorklogSegment(segment, date) {
   // Colour comes from the task id so the same task keeps one hue all day and a
   // split run reads as one thing interrupted rather than two unrelated blocks.
   block.style.setProperty('--segment-hue', String(worklogHue(segment.taskId)));
+  if (manual) block.appendChild(makeElement('span', 'worklog-segment-badge', '补'));
   block.appendChild(makeElement('strong', 'worklog-segment-title', segment.title));
   const range = `${Worklog.formatMinute(segment.startMinute)}–${segment.running ? '进行中' : Worklog.formatMinute(segment.endMinute)}`;
   block.appendChild(makeElement('small', 'worklog-segment-meta', `${range} · ${segment.minutes} 分`));
@@ -2134,6 +2151,7 @@ function renderWorklog() {
     const dayMinutes = range.byDate[day]?.minutes || 0;
     heading.appendChild(makeElement('small', '', dayMinutes ? humanMinutes(dayMinutes) : '未记录'));
     const body = makeElement('div', 'worklog-day-body');
+    body.dataset.date = day;
     body.style.height = `${height}px`;
     for (let hour = WORKLOG_START_HOUR; hour < WORKLOG_END_HOUR; hour += 1) {
       const line = makeElement('i', 'worklog-hour-line');
@@ -2213,14 +2231,146 @@ function nowMinuteOfDay() {
   return (Number(value.hour) % 24) * 60 + Number(value.minute);
 }
 
-function openManualTime(taskId, date = todayDate()) {
-  const task = activeTasks().find((item) => item.id === taskId && !item.deletedAt);
-  if (!task) return;
-  elements.manualTimeTaskId.value = task.id;
-  elements.manualTimeTaskTitle.textContent = task.title;
+const BACKFILL_STATE = { mode: 'timed', editingId: null };
+
+function parseClockMinutes(value) {
+  const match = /^(\d{2}):(\d{2})$/.exec(String(value || ''));
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+function clockFromMinutes(minute) {
+  const value = Math.max(0, Math.min(1439, Math.round(minute)));
+  return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+}
+
+// The candidate segment the dialog would create, in minutes-of-day. In duration
+// mode the start is chosen for the user: right after the day's last record, or
+// ending at now for today, so a "just spent N minutes" entry lands sensibly.
+function backfillSegment() {
+  const date = elements.manualTimeDate.value;
+  if (BACKFILL_STATE.mode === 'timed') {
+    const start = parseClockMinutes(elements.manualTimeStart.value);
+    const end = parseClockMinutes(elements.manualTimeEnd.value);
+    if (start === null || end === null) return null;
+    return { date, startMinute: start, minutes: end - start };
+  }
+  const minutes = Number(elements.manualTimeMinutes.value);
+  if (!Number.isFinite(minutes) || minutes < 1) return null;
+  const summary = state.store ? Worklog.dailySummary(state.store, date, { now: new Date() }) : null;
+  const anchorEnd = date === todayDate()
+    ? nowMinuteOfDay()
+    : (summary && summary.lastMinute !== null ? summary.lastMinute : 18 * 60);
+  return { date, startMinute: Math.max(0, anchorEnd - minutes), minutes };
+}
+
+function runningEntryForTask(taskId) {
+  const running = runningEntry();
+  return running && (running.taskId || '') === (taskId || '') ? running : null;
+}
+
+function renderBackfillDuration() {
+  const segment = backfillSegment();
+  const save = elements.saveManualTime;
+  if (!segment || segment.minutes < 1) {
+    elements.manualTimeDuration.textContent = BACKFILL_STATE.mode === 'timed'
+      ? '结束时间要晚于开始时间'
+      : '请输入有效的时长';
+    elements.manualTimeDuration.classList.add('is-bad');
+    save.disabled = true;
+  } else if (segment.minutes > 1440) {
+    elements.manualTimeDuration.textContent = '一段最多 24 小时';
+    elements.manualTimeDuration.classList.add('is-bad');
+    save.disabled = true;
+  } else {
+    elements.manualTimeDuration.textContent = `共 ${humanMinutes(segment.minutes)}`;
+    elements.manualTimeDuration.classList.remove('is-bad');
+    save.disabled = false;
+  }
+
+  // Warn only when the picked task is being timed right now and the backfilled
+  // slot overlaps that live run — the one case that would double-count.
+  const taskId = elements.manualTimeTask.value;
+  const running = BACKFILL_STATE.editingId ? null : runningEntryForTask(taskId);
+  let conflict = false;
+  if (running && segment) {
+    const runStart = worklogMinuteOfEntry(running);
+    const runEnd = nowMinuteOfDay();
+    conflict = segment.startMinute < runEnd && runStart < segment.startMinute + segment.minutes
+      && elements.manualTimeDate.value === (running.reportingDate || todayDate());
+  }
+  elements.manualTimeConflict.hidden = !conflict;
+  if (conflict) {
+    const title = taskId ? (activeTasks().find((t) => t.id === taskId)?.title || '任务') : '自由计时';
+    elements.manualTimeConflictText.textContent = `「${title}」正在计时中（${clockFromMinutes(worklogMinuteOfEntry(running))}–进行中）。`;
+  }
+}
+
+function worklogMinuteOfEntry(entry) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: state.store?.meta?.timeZone || DAYMARK_TIME_ZONE,
+    hour12: false, hour: '2-digit', minute: '2-digit',
+  }).formatToParts(new Date(entry.startedAt));
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return (Number(value.hour) % 24) * 60 + Number(value.minute);
+}
+
+function setBackfillMode(mode) {
+  BACKFILL_STATE.mode = mode;
+  elements.modeTimed.classList.toggle('is-active', mode === 'timed');
+  elements.modeTimed.setAttribute('aria-selected', String(mode === 'timed'));
+  elements.modeDuration.classList.toggle('is-active', mode === 'duration');
+  elements.modeDuration.setAttribute('aria-selected', String(mode === 'duration'));
+  elements.backfillTimed.hidden = mode !== 'timed';
+  elements.backfillDurationOnly.hidden = mode !== 'duration';
+  renderBackfillDuration();
+}
+
+function fillBackfillTaskOptions(selected) {
+  const options = [new Option('自由计时（不关联任务）', '')];
+  visibleTasks(activeTasks(), 'today', '', todayDate())
+    .filter((task) => task.status === 'active')
+    .forEach((task) => options.push(new Option(task.title, task.id)));
+  // An edited entry may point at a task not in today's list; keep it selectable.
+  if (selected && !options.some((option) => option.value === selected)) {
+    const task = activeTasks().find((item) => item.id === selected);
+    if (task) options.push(new Option(task.title, task.id));
+  }
+  elements.manualTimeTask.replaceChildren(...options);
+  elements.manualTimeTask.value = [...elements.manualTimeTask.options].some((o) => o.value === (selected || ''))
+    ? (selected || '')
+    : '';
+}
+
+// Opens the backfill dialog. `seed` may carry a task, a date, a prefill start
+// minute (from clicking an empty timeline slot), or an entry to edit.
+function openManualTime(seed = {}) {
+  const editing = seed.entry || null;
+  BACKFILL_STATE.editingId = editing ? editing.id : null;
+  elements.manualTimeEntryId.value = editing ? editing.id : '';
+  elements.manualTimeTitle.textContent = editing ? '编辑处理时段' : '补记处理时段';
+  elements.manualTimeSub.textContent = editing ? '修改这段的任务、起止或说明' : '补一段忘了计时的工作';
+  elements.saveManualTime.textContent = editing ? '保存修改' : '保存时段';
+
+  const date = editing ? (editing.reportingDate || todayDate()) : (seed.date || todayDate());
+  fillBackfillTaskOptions(editing ? (editing.taskId || '') : (seed.taskId || ''));
   elements.manualTimeDate.value = date;
-  elements.manualTimeMinutes.value = '30';
-  elements.manualTimeNote.value = '';
+  elements.manualTimeNote.value = editing ? (editing.note || '') : '';
+
+  if (editing) {
+    const start = worklogMinuteOfEntry(editing);
+    const mins = Math.max(1, Math.round((Number(editing.durationSeconds) || 60) / 60));
+    elements.manualTimeStart.value = clockFromMinutes(start);
+    elements.manualTimeEnd.value = clockFromMinutes(Math.min(1439, start + mins));
+    elements.manualTimeMinutes.value = String(mins);
+  } else {
+    const start = Number.isFinite(seed.startMinute)
+      ? Math.round(seed.startMinute)
+      : Math.max(0, nowMinuteOfDay() - 30);
+    elements.manualTimeStart.value = clockFromMinutes(start);
+    elements.manualTimeEnd.value = clockFromMinutes(Math.min(1439, start + 30));
+    elements.manualTimeMinutes.value = '30';
+  }
+  setBackfillMode('timed');
   if (!elements.manualTimeDialog.open) elements.manualTimeDialog.showModal();
 }
 
@@ -2800,8 +2950,75 @@ elements.worklogToday.addEventListener('click', () => {
 
 elements.worklogCalendar.addEventListener('click', (event) => {
   const segment = event.target.closest('.worklog-segment');
-  if (!segment || !segment.dataset.taskId) return;
-  selectTask(segment.dataset.taskId);
+  if (segment) {
+    openSegmentMenu(segment, event);
+    return;
+  }
+  // A click on empty timeline space backfills a segment starting at that minute,
+  // which is the fastest way to log a stretch you can point at on the clock.
+  const body = event.target.closest('.worklog-day-body');
+  if (!body) return;
+  const rect = body.getBoundingClientRect();
+  const minute = WORKLOG_START_HOUR * 60 + (event.clientY - rect.top) / WORKLOG_PIXELS_PER_MINUTE;
+  openManualTime({ date: body.dataset.date, startMinute: Math.max(0, Math.round(minute / 5) * 5) });
+});
+
+elements.worklogBackfill.addEventListener('click', () => {
+  openManualTime({ date: state.worklogDate || todayDate() });
+});
+
+function openSegmentMenu(segmentEl, event) {
+  const entry = focusEntryById(segmentEl.dataset.entryId);
+  if (!entry) return;
+  const menu = elements.segmentMenu;
+  menu.dataset.entryId = entry.id;
+  // A running segment cannot have its end edited or be deleted; only finished
+  // stretches are editable, so the menu only offers actions when they apply.
+  const finished = Boolean(entry.endedAt);
+  menu.querySelectorAll('[data-segment-action]').forEach((button) => {
+    button.hidden = !finished;
+  });
+  if (!finished) return;
+  menu.hidden = false;
+  const menuWidth = 148;
+  menu.style.left = `${Math.min(event.clientX, window.innerWidth - menuWidth - 8)}px`;
+  menu.style.top = `${event.clientY + 6}px`;
+}
+
+elements.segmentMenu.addEventListener('click', (event) => {
+  const action = event.target.closest('[data-segment-action]')?.dataset.segmentAction;
+  const entry = focusEntryById(elements.segmentMenu.dataset.entryId);
+  elements.segmentMenu.hidden = true;
+  if (!action || !entry) return;
+  if (action === 'edit') {
+    openManualTime({ entry });
+  } else if (action === 'delete') {
+    runAction(dispatch({
+      type: 'deleteTimeEntry',
+      taskId: entry.taskId,
+      payload: { entryId: entry.id },
+    }, {
+      undo: {
+        type: 'addManualTime',
+        taskId: entry.taskId,
+        payload: {
+          entryId: entry.id,
+          date: entry.reportingDate,
+          startMinute: worklogMinuteOfEntry(entry),
+          minutes: Math.max(1, Math.round((Number(entry.durationSeconds) || 60) / 60)),
+          note: entry.note || '',
+        },
+      },
+      undoMessage: '已恢复这段记录',
+      message: '已删除这段记录',
+    }));
+  }
+});
+
+document.addEventListener('click', (event) => {
+  if (!elements.segmentMenu.hidden && !event.target.closest('#segment-menu') && !event.target.closest('.worklog-segment')) {
+    elements.segmentMenu.hidden = true;
+  }
 });
 
 // --- Todo calendar ---
@@ -2953,13 +3170,45 @@ elements.runComplete.addEventListener('click', () => {
 });
 
 function saveManualTime() {
-  const taskId = elements.manualTimeTaskId.value;
   const date = elements.manualTimeDate.value;
-  const minutes = Number(elements.manualTimeMinutes.value);
-  if (!taskId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
-    showToast('请填写有效的日期和实际用时', false);
+  const segment = backfillSegment();
+  const taskId = elements.manualTimeTask.value || null;
+  const note = elements.manualTimeNote.value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !segment || segment.minutes < 1 || segment.minutes > 1440) {
+    showToast('请填写有效的日期和时段', false);
     return;
   }
+
+  if (BACKFILL_STATE.editingId) {
+    const before = focusEntryById(BACKFILL_STATE.editingId);
+    runAction(dispatch({
+      type: 'updateTimeEntry',
+      taskId,
+      payload: {
+        entryId: BACKFILL_STATE.editingId,
+        date,
+        startMinute: segment.startMinute,
+        minutes: segment.minutes,
+        note,
+      },
+    }, {
+      undo: before ? {
+        type: 'updateTimeEntry',
+        taskId: before.taskId,
+        payload: {
+          entryId: before.id,
+          date: before.reportingDate,
+          startMinute: worklogMinuteOfEntry(before),
+          minutes: Math.max(1, Math.round((Number(before.durationSeconds) || 60) / 60)),
+          note: before.note || '',
+        },
+      } : null,
+      undoMessage: '已还原这段记录',
+      message: '已更新处理时段',
+    }).then(() => elements.manualTimeDialog.close()));
+    return;
+  }
+
   const entryId = commandId('time');
   runAction(dispatch({
     type: 'addManualTime',
@@ -2967,14 +3216,19 @@ function saveManualTime() {
     payload: {
       entryId,
       date,
-      minutes,
-      note: elements.manualTimeNote.value.trim(),
+      startMinute: segment.startMinute,
+      minutes: segment.minutes,
+      note,
     },
   }, {
     undo: { type: 'deleteTimeEntry', taskId, payload: { entryId } },
-    undoMessage: '已删除补录用时',
-    message: '实际用时已补录',
+    undoMessage: '已删除补记时段',
+    message: `已补记 ${humanMinutes(segment.minutes)}`,
   }).then(() => elements.manualTimeDialog.close()));
+}
+
+function focusEntryById(id) {
+  return (state.store?.timeEntries || []).find((entry) => entry.id === id) || null;
 }
 
 elements.manualTimeForm.addEventListener('submit', (event) => {
@@ -2982,6 +3236,37 @@ elements.manualTimeForm.addEventListener('submit', (event) => {
   saveManualTime();
 });
 elements.saveManualTime.addEventListener('click', saveManualTime);
+elements.modeTimed.addEventListener('click', () => setBackfillMode('timed'));
+elements.modeDuration.addEventListener('click', () => setBackfillMode('duration'));
+[elements.manualTimeStart, elements.manualTimeEnd, elements.manualTimeMinutes, elements.manualTimeDate, elements.manualTimeTask]
+  .forEach((el) => el.addEventListener('input', renderBackfillDuration));
+elements.manualTimeTask.addEventListener('change', renderBackfillDuration);
+
+elements.manualTimeBackdate.addEventListener('click', () => {
+  const taskId = elements.manualTimeTask.value || null;
+  const running = runningEntryForTask(taskId);
+  if (!running) return;
+  const start = parseClockMinutes(elements.manualTimeStart.value);
+  if (start === null) return;
+  // Re-anchor the SAME run to an earlier start rather than adding a second
+  // overlapping segment: stop it (a running entry can't be edited), then move
+  // its one entry's start back and stretch its end to now.
+  runAction((async () => {
+    await dispatch({ type: 'stopFocus', taskId: running.taskId, payload: { entryId: running.id } });
+    await dispatch({
+      type: 'updateTimeEntry',
+      taskId: running.taskId,
+      payload: {
+        entryId: running.id,
+        date: running.reportingDate,
+        startMinute: start,
+        minutes: Math.max(1, nowMinuteOfDay() - start),
+        note: running.note || '',
+      },
+    }, { message: `已把开始时刻回填到 ${clockFromMinutes(start)}` });
+    elements.manualTimeDialog.close();
+  })());
+});
 
 document.querySelector('.quick-options').addEventListener('click', (event) => {
   const button = event.target.closest('[data-quick-date]');

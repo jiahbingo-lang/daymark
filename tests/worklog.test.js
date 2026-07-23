@@ -163,3 +163,77 @@ test('v4 data upgrades to v5 without disturbing what it already held', () => {
   // the decision to drop that feature stays reversible.
   assert.equal(upgraded.scheduleBlocks.length, 1);
 });
+
+test('a backfilled stretch lands at its real start, not the moment it was logged', () => {
+  let store = withTask(baseStore(), 't1', '整理季度数据');
+  // Logged at 14:00 China time, but the work was 09:00–09:45 that morning.
+  store = applyCommand(store, {
+    type: 'addManualTime',
+    taskId: 't1',
+    occurredAt: '2026-07-22T06:00:00.000Z',
+    payload: { entryId: 'm1', date: '2026-07-22', startMinute: 9 * 60, minutes: 45, note: '需求梳理' },
+  });
+  const segment = Worklog.segmentsForDate(store, '2026-07-22', { now: NOW })[0];
+  assert.equal(Worklog.formatMinute(segment.startMinute), '09:00');
+  assert.equal(segment.minutes, 45);
+  assert.equal(segment.source, 'manual');
+  assert.equal(store.timeEntries[0].note, '需求梳理');
+});
+
+test('a backfilled stretch can be free of any task', () => {
+  let store = baseStore();
+  store = applyCommand(store, {
+    type: 'addManualTime',
+    occurredAt: '2026-07-22T06:00:00.000Z',
+    payload: { entryId: 'm1', date: '2026-07-22', startMinute: 10 * 60, minutes: 20 },
+  });
+  assert.equal(store.timeEntries[0].taskId, null);
+  assert.equal(store.timeEntries.length, 1);
+});
+
+test('editing a stretch moves its start and end and marks it manual', () => {
+  let store = withTask(baseStore(), 't1', '整理季度数据');
+  store = run(store, 't1', 'e1', '2026-07-22T01:05:00.000Z', '2026-07-22T01:50:00.000Z');
+  assert.equal(store.timeEntries[0].source, 'focus');
+
+  store = applyCommand(store, {
+    type: 'updateTimeEntry',
+    occurredAt: '2026-07-22T06:00:00.000Z',
+    payload: { entryId: 'e1', startMinute: 10 * 60, minutes: 75 },
+  });
+  const segment = Worklog.segmentsForDate(store, '2026-07-22', { now: NOW })[0];
+  assert.equal(Worklog.formatMinute(segment.startMinute), '10:00');
+  assert.equal(segment.minutes, 75);
+  // A timed run whose times the user re-asserted is no longer measured.
+  assert.equal(store.timeEntries[0].source, 'manual');
+});
+
+test('a running stretch cannot be edited or deleted until it stops', () => {
+  let store = withTask(baseStore(), 't1', '整理季度数据');
+  store = run(store, 't1', 'e1', '2026-07-22T01:05:00.000Z', null);
+  assert.throws(() => applyCommand(store, {
+    type: 'updateTimeEntry', payload: { entryId: 'e1', startMinute: 600, minutes: 30 },
+  }), /running/);
+  assert.throws(() => applyCommand(store, {
+    type: 'deleteTimeEntry', payload: { entryId: 'e1' },
+  }), /running/);
+});
+
+test('deleting a stretch removes it, and re-adding restores it (undo path)', () => {
+  let store = withTask(baseStore(), 't1', '整理季度数据');
+  store = applyCommand(store, {
+    type: 'addManualTime', taskId: 't1', occurredAt: '2026-07-22T06:00:00.000Z',
+    payload: { entryId: 'm1', date: '2026-07-22', startMinute: 540, minutes: 30 },
+  });
+  store = applyCommand(store, {
+    type: 'deleteTimeEntry', taskId: 't1', occurredAt: '2026-07-22T06:00:00.000Z', payload: { entryId: 'm1' },
+  });
+  assert.equal(store.timeEntries.length, 0);
+  // The undo re-adds with the same id and times.
+  store = applyCommand(store, {
+    type: 'addManualTime', taskId: 't1', occurredAt: '2026-07-22T06:00:00.000Z',
+    payload: { entryId: 'm1', date: '2026-07-22', startMinute: 540, minutes: 30 },
+  });
+  assert.equal(store.timeEntries.length, 1);
+  assert.equal(Worklog.formatMinute(Worklog.segmentsForDate(store, '2026-07-22', { now: NOW })[0].startMinute), '09:00');
+});
