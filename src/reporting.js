@@ -536,10 +536,11 @@
 
   function plannedCompletedTasks(record) {
     const completedIds = new Set(recordArrays(record, 'completed').map((task) => taskId(task)).filter(Boolean));
-    const reopenedIds = new Set(recordArrays(record, 'reopened').map((task) => taskId(task)).filter(Boolean));
-    return recordArrays(record, 'planned').filter(
-      (task) => completedIds.has(taskId(task)) && !reopenedIds.has(taskId(task)),
-    );
+    // `reopened` is an audit trail, not the task's final state. A task can be
+    // completed, restored to Todo, and completed again on the same day. The
+    // reconciled `completed` collection already represents its final state,
+    // so excluding every historically reopened task would undercount it.
+    return recordArrays(record, 'planned').filter((task) => completedIds.has(taskId(task)));
   }
 
   function reconcileDailyRecord(store, record, options = {}) {
@@ -582,10 +583,7 @@
     result.top3 = top3;
     const plannedCompleted = plannedCompletedTasks(result);
     const completedIds = new Set(completed.map((task) => taskId(task)).filter(Boolean));
-    const reopenedIds = new Set(recordArrays(result, 'reopened').map((task) => taskId(task)).filter(Boolean));
-    const top3Completed = top3.filter(
-      (task) => completedIds.has(taskId(task)) && !reopenedIds.has(taskId(task)),
-    );
+    const top3Completed = top3.filter((task) => completedIds.has(taskId(task)));
     const actualTime = actualTimeForDate(store, result.date);
     result.actualTime = actualTime.entries;
     result.summary = {

@@ -350,6 +350,52 @@ test('reopening an archived completion withdraws it from review totals and AI-fa
   assert.equal(report.totals.completedMinutes, 0);
 });
 
+test('completing a reopened task again restores daily, Top3, and period completion totals', () => {
+  let source = sanitizeStore({ version: 1, tasks: [] }, {
+    now: new Date('2026-07-14T08:00:00.000Z'),
+    timeZone: 'UTC',
+  });
+  source = applyCommand(source, {
+    type: 'create', eventId: 'create-recompleted', taskId: 'recompleted', occurredAt: '2026-07-14T09:00:00.000Z',
+    payload: {
+      title: '恢复后再次完成',
+      plannedDate: '2026-07-14',
+      top3Date: '2026-07-14',
+      estimateMinutes: 45,
+    },
+  });
+  source = applyCommand(source, {
+    type: 'toggle', eventId: 'complete-first', taskId: 'recompleted', occurredAt: '2026-07-14T10:00:00.000Z',
+  });
+  source = applyCommand(source, {
+    type: 'toggle', eventId: 'restore-once', taskId: 'recompleted', occurredAt: '2026-07-14T11:00:00.000Z',
+  });
+  source = applyCommand(source, {
+    type: 'toggle', eventId: 'complete-final', taskId: 'recompleted', occurredAt: '2026-07-14T12:00:00.000Z',
+  });
+  source = finalizeMissingArchives(source, '2026-07-15', {
+    finalizedAt: '2026-07-15T00:00:00.000Z',
+  });
+
+  const record = listDailyRecords(source).find((entry) => entry.date === '2026-07-14');
+  assert.deepEqual(record.completed.map((item) => item.id), ['recompleted']);
+  assert.deepEqual(record.reopened.map((item) => item.id), ['recompleted']);
+  assert.equal(record.summary.plannedCount, 1);
+  assert.equal(record.summary.completedPlannedCount, 1);
+  assert.equal(record.summary.completionRate, 100);
+  assert.equal(record.summary.reopenedCount, 1, 'reopen audit history is retained');
+  assert.equal(record.summary.top3CompletedCount, 1);
+  assert.equal(record.summary.top3CompletionRate, 100);
+
+  const report = buildPeriodReport(source, { year: 2026, quarter: 3, today: '2026-07-15' });
+  assert.equal(report.totals.planned, 1);
+  assert.equal(report.totals.completed, 1);
+  assert.equal(report.totals.completedPlanned, 1);
+  assert.equal(report.totals.completionRate, 100);
+  assert.equal(report.top3.completed, 1);
+  assert.equal(report.top3.completionRate, 100);
+});
+
 test('reporting consumes domain v2 toggle/meta events and ignores baseline imports as new work', () => {
   let source = sanitizeStore(
     { version: 1, tasks: [{ id: 'legacy', title: '迁移前任务', plannedDate: '2026-07-15' }] },
