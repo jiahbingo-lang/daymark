@@ -75,7 +75,7 @@ Daymark 是一个本地优先的桌面日程待办工具。它把「随手收集
 
 ## 安装与首次使用
 
-1. 打开 `dist/Daymark-1.5.0-arm64.dmg`，将 Daymark 拖到“应用程序”。
+1. 打开 `dist/Daymark-1.6.0-arm64.dmg`，将 Daymark 拖到“应用程序”。
 2. 当前本机验收包没有 Apple Developer ID 公证；若首次启动被拦截，请在 Finder 中右键 Daymark 选择“打开”。
 3. 日常待办、节假日日历和本地工作总结不需要 API Key。在“工作回顾”页配置自己的 OpenAI API Key 后，才会启用 AI 初稿。
 4. 如需核对安装包完整性，请进入 `dist/` 后运行 `shasum -a 256 -c SHA256SUMS.txt`。
