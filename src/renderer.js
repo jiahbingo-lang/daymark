@@ -601,7 +601,10 @@ function renderHeader() {
 
 function buildTaskRow(task, options = {}) {
   const showTop3 = Boolean(task.top3Date && task.top3Date === task.plannedDate);
-  const isWeekendPlan = Boolean(task.plannedDate && Calendar.isWeekendDate(task.plannedDate));
+  // Keyed off the statutory calendar, not the raw day of week: a 调休 Saturday
+  // is a mandated workday and must not be labelled as time off, while a midweek
+  // statutory holiday must be.
+  const restDay = task.plannedDate ? Calendar.chinaRestDay(task.plannedDate) : null;
   const top3Label = task.top3Date === todayDate()
     ? '★ 今日 Top 3'
     : `★ ${formatShortDate(task.top3Date)} Top 3`;
@@ -611,11 +614,11 @@ function buildTaskRow(task, options = {}) {
   row.classList.toggle('is-completed', task.status === 'completed');
   row.classList.toggle('is-top3', showTop3);
   row.classList.toggle('is-flagged', Boolean(task.flagged));
-  row.classList.toggle('is-weekend-plan', isWeekendPlan);
+  row.classList.toggle('is-restday-plan', Boolean(restDay));
   row.dataset.taskId = task.id;
   row.setAttribute('role', 'listitem');
   row.setAttribute('tabindex', task.id === state.selectedId ? '0' : '-1');
-  row.setAttribute('aria-label', `${task.title}${showTop3 ? `，${top3Label.slice(2)}` : ''}${task.flagged ? '，已加旗标' : ''}${isWeekendPlan ? '，周末安排' : ''}`);
+  row.setAttribute('aria-label', `${task.title}${showTop3 ? `，${top3Label.slice(2)}` : ''}${task.flagged ? '，已加旗标' : ''}${restDay ? `，${restDay.label}` : ''}`);
 
   const checkbox = document.createElement('button');
   checkbox.type = 'button';
@@ -647,7 +650,7 @@ function buildTaskRow(task, options = {}) {
   }
   if (showTop3) appendMeta(meta, top3Label, 'top3-pill');
   if (task.flagged) appendMeta(meta, '⚑ 旗标', 'flagged-pill');
-  if (isWeekendPlan) appendMeta(meta, '周末安排', 'weekend-pill');
+  if (restDay) appendMeta(meta, restDay.label, 'restday-pill');
   if (task.plannedDate) appendMeta(meta, `计划 ${formatShortDate(task.plannedDate)}`, 'planned-pill');
   if (task.dueDate) {
     const deadline = appendMeta(meta, `截止 ${formatShortDate(task.dueDate)}`, 'deadline-pill');
@@ -1284,7 +1287,7 @@ function renderDayDetail() {
   if (!date) return;
   const detail = Calendar.buildDateDetail(state.store, date);
   const holiday = Calendar.getChinaHoliday(date);
-  const isWeekend = Calendar.isWeekendDate(date);
+  const restDay = Calendar.chinaRestDay(date);
   const planned = Array.isArray(detail.planned) ? detail.planned : [];
   const ranged = Array.isArray(detail.range) ? detail.range : [];
   const completed = Array.isArray(detail.completed) ? detail.completed : [];
@@ -1304,7 +1307,7 @@ function renderDayDetail() {
       planned: plannedIds.has(task.id),
       top3: top3Ids.has(task.id) || task.top3Date === date,
       flagged: Boolean(task.flagged),
-      weekend: isWeekend,
+      restLabel: restDay ? restDay.label : null,
       phase: task.schedulePhase || null,
       minutes: Number(task.scheduledMinutes) || 0,
       needsEstimate: Boolean(task.scheduleNeedsEstimate),
@@ -1321,7 +1324,7 @@ function renderDayDetail() {
       planned: false,
       top3: false,
       flagged: false,
-      weekend: isWeekend,
+      restLabel: restDay ? restDay.label : null,
       phase: null,
       minutes: 0,
       needsEstimate: false,
@@ -1336,23 +1339,23 @@ function renderDayDetail() {
     : planned.filter((task) => completedIds.has(task.id)).length;
 
   elements.dayDetailDate.textContent = formatCalendarDate(date);
-  elements.dayDetailHoliday.hidden = !holiday && !isWeekend;
+  elements.dayDetailHoliday.hidden = !holiday && !restDay;
   elements.dayDetailHoliday.textContent = holiday
-    ? `${holiday.badge} · ${holiday.name}${isWeekend ? ' · 周末' : ''}`
-    : isWeekend ? '周末' : '';
+    ? `${holiday.badge} · ${holiday.name}`
+    : restDay ? restDay.name : '';
   elements.dayDetailHoliday.classList.toggle('is-makeup', holiday?.type === 'makeup');
-  elements.dayDetailHoliday.classList.toggle('is-weekend', isWeekend && !holiday);
+  elements.dayDetailHoliday.classList.toggle('is-weekend', Boolean(restDay) && !holiday);
   elements.dayDetailScore.textContent = `完成 ${completed.length} · 计划 ${plannedCount} · 实际 ${Number(detail.summary?.actualMinutes) || 0} 分钟`;
   elements.dayDetailNote.textContent = detail.dailyNotes
-    || (holiday ? `${holiday.name}${holiday.type === 'makeup' ? '，当天按调休工作日标注。' : '，当天按法定假日标注。'}${isWeekend ? ' 日期同时属于周末。' : ''}` : '')
-    || (isWeekend ? '周末日期；安排在当天的任务会显示“周末安排”标签。' : '')
+    || (holiday ? `${holiday.name}${holiday.type === 'makeup' ? '，当天按调休工作日标注，不计入休息日。' : '，当天按法定假日标注。'}` : '')
+    || (restDay ? `${restDay.name}；安排在当天的任务会显示“${restDay.label}”标签。` : '')
     || (detail.dataIntegrity?.complete === false ? detail.dataIntegrity.message : '当天没有填写每日备注。');
 
   const fragment = document.createDocumentFragment();
   items.forEach((item) => {
     const row = makeElement('li', `day-detail-task${item.done ? '' : ' is-open'}${item.top3 ? ' is-top3' : ''}${item.flagged ? ' is-flagged' : ''}${!item.planned && !item.done ? ' is-range-only' : ''}`);
     const content = makeElement('span', 'day-detail-task-content');
-    if (item.weekend) content.appendChild(makeElement('span', 'day-detail-weekend', '周末安排'));
+    if (item.restLabel) content.appendChild(makeElement('span', 'day-detail-restday', item.restLabel));
     if (item.top3) content.appendChild(makeElement('span', 'day-detail-top3', '★ Top 3'));
     if (item.flagged) content.appendChild(makeElement('span', 'day-detail-flagged', '⚑ 旗标'));
     const phaseLabels = { single: '单日', start: '开始', middle: '进行中', deadline: '截止' };
@@ -1377,7 +1380,7 @@ function renderCalendar() {
   }
   const calendar = Calendar.buildMonthGrid({ year, month, store: state.store, today: todayDate() });
   const specialDays = calendar.cells.filter((cell) => cell.inCurrentMonth && cell.holiday);
-  const weekendDays = calendar.cells.filter((cell) => cell.inCurrentMonth && cell.isWeekend);
+  const weekendDays = calendar.cells.filter((cell) => cell.inCurrentMonth && cell.isOrdinaryWeekend);
   elements.holidaySourceNote.textContent = calendar.holidaySource
     ? `${calendar.holidaySource.label} · 本月 ${weekendDays.length} 个周末日，${specialDays.length} 天休假或调休`
     : `本月 ${weekendDays.length} 个周末日 · 该年份暂无内置官方节假日数据`;
@@ -1397,12 +1400,12 @@ function renderCalendar() {
     button.classList.toggle('is-outside', !cell.inCurrentMonth);
     button.classList.toggle('is-today', cell.isToday);
     button.classList.toggle('is-selected', cell.date === state.reviewSelectedDate);
-    button.classList.toggle('is-weekend', cell.isWeekend);
+    button.classList.toggle('is-weekend', cell.isOrdinaryWeekend);
     button.classList.toggle('is-holiday', cell.holiday?.type === 'holiday');
     button.classList.toggle('is-makeup', cell.holiday?.type === 'makeup');
     button.classList.toggle('has-schedule', cell.rangeCount > 0);
     const labelParts = [formatCalendarDate(cell.date)];
-    if (cell.isWeekend) labelParts.push('周末');
+    if (cell.isOrdinaryWeekend) labelParts.push('周末');
     if (cell.holiday) labelParts.push(cell.holiday.name, cell.holiday.badge === '休' ? '休假' : '调休上班');
     if (cell.rangeCount) labelParts.push(`跨期任务 ${cell.rangeCount} 项`);
     if (cell.metrics.actualMinutes) labelParts.push(`实际投入 ${cell.metrics.actualMinutes} 分钟`);
@@ -1415,7 +1418,9 @@ function renderCalendar() {
     if (cell.holiday) {
       badges.appendChild(makeElement('span', `day-badge${cell.holiday.type === 'makeup' ? ' is-makeup' : ''}`, cell.holiday.badge));
     }
-    if (cell.isWeekend) badges.appendChild(makeElement('span', 'day-badge is-weekend', '周末'));
+    // Holidays and 调休 days already carry their own 休/班 badge; stacking a
+    // second "周末" badge on a mandated workday would contradict it.
+    if (cell.isOrdinaryWeekend) badges.appendChild(makeElement('span', 'day-badge is-weekend', '周末'));
     top.appendChild(badges);
     const tally = makeElement('span', 'day-tally', cell.metrics.plannedCount || cell.metrics.completedCount
       ? `完成 ${cell.metrics.completedCount} · 计划 ${cell.metrics.plannedCount}`
@@ -1531,7 +1536,8 @@ function renderExecutionBlock(block, schedule) {
   const heading = makeElement('div', 'execution-block-heading');
   const time = makeElement('span', 'execution-block-time', `${Execution.formatMinute(block.startMinute)} · ${block.durationMinutes} 分`);
   const badges = makeElement('span', 'execution-block-badges');
-  if (Calendar.isWeekendDate(block.date)) badges.appendChild(makeElement('b', 'execution-weekend', '周末'));
+  const blockRestDay = Calendar.chinaRestDay(block.date);
+  if (blockRestDay) badges.appendChild(makeElement('b', 'execution-restday', blockRestDay.short));
   if (task.top3Date === block.date) badges.appendChild(makeElement('b', 'execution-top3', '★ Top3'));
   if (task.flagged) badges.appendChild(makeElement('b', 'execution-flag', '⚑'));
   if (risk?.risky) badges.appendChild(makeElement('b', 'execution-risk', '期限风险'));
@@ -1603,10 +1609,10 @@ function renderExecution() {
     const column = makeElement('section', `execution-day${day === todayDate() ? ' is-today' : ''}`);
     column.dataset.executionDate = day;
     const holiday = Calendar.getChinaHoliday(day);
-    const isWeekend = Calendar.isWeekendDate(day);
+    const isOrdinaryWeekend = Calendar.isOrdinaryWeekend(day);
     const heading = makeElement('header', 'execution-day-header');
     heading.append(makeElement('strong', '', executionDateLabel(day)));
-    if (isWeekend) heading.appendChild(makeElement('span', 'is-weekend', '周末'));
+    if (isOrdinaryWeekend) heading.appendChild(makeElement('span', 'is-weekend', '周末'));
     if (holiday) heading.appendChild(makeElement('span', holiday.type === 'makeup' ? 'is-makeup' : 'is-holiday', `${holiday.badge} ${holiday.name}`));
     const dayMinutes = schedule.byDate[day].reduce((total, block) => total + block.durationMinutes, 0);
     heading.appendChild(makeElement('small', dayMinutes > schedule.dailyCapacityMinutes ? 'is-overload' : '', `${dayMinutes}/${schedule.dailyCapacityMinutes} 分`));

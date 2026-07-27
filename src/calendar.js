@@ -1,11 +1,17 @@
 (function exposeCalendar(global) {
-  const HOLIDAY_SOURCE = Object.freeze({
-    jurisdiction: '中国大陆',
-    year: 2026,
-    publisher: '国务院办公厅',
-    label: '中国大陆 · 2026 国务院办公厅',
-    url: 'https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm',
-  });
+  // Statutory holidays, makeup workdays and the workday predicate all come from
+  // the shared china-calendar module; this file only renders them.
+  const ChinaCalendar = typeof module !== 'undefined' && module.exports
+    ? require('./china-calendar')
+    : global.DaymarkChinaCalendar;
+  const {
+    HOLIDAY_SOURCE,
+    getChinaHoliday,
+    isWeekendDate,
+    isChinaWorkday,
+    chinaRestDay,
+    isOrdinaryWeekend,
+  } = ChinaCalendar;
 
   function clone(value) {
     if (value === undefined) return undefined;
@@ -24,38 +30,6 @@
   function isoDate(date) {
     return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
   }
-
-  function addDays(value, amount) {
-    const parsed = new Date(`${value}T00:00:00.000Z`);
-    parsed.setUTCDate(parsed.getUTCDate() + amount);
-    return isoDate(parsed);
-  }
-
-  const holidayEntries = new Map();
-
-  function addHoliday(name, startDate, endDate) {
-    for (let date = startDate; date <= endDate; date = addDays(date, 1)) {
-      holidayEntries.set(date, Object.freeze({ date, name, type: 'holiday', badge: '休' }));
-    }
-  }
-
-  function addMakeup(name, dates) {
-    dates.forEach((date) => {
-      holidayEntries.set(date, Object.freeze({ date, name: `${name}调休`, type: 'makeup', badge: '班' }));
-    });
-  }
-
-  addHoliday('元旦', '2026-01-01', '2026-01-03');
-  addMakeup('元旦', ['2026-01-04']);
-  addHoliday('春节', '2026-02-15', '2026-02-23');
-  addMakeup('春节', ['2026-02-14', '2026-02-28']);
-  addHoliday('清明节', '2026-04-04', '2026-04-06');
-  addHoliday('劳动节', '2026-05-01', '2026-05-05');
-  addMakeup('劳动节', ['2026-05-09']);
-  addHoliday('端午节', '2026-06-19', '2026-06-21');
-  addHoliday('中秋节', '2026-09-25', '2026-09-27');
-  addHoliday('国庆节', '2026-10-01', '2026-10-07');
-  addMakeup('国庆节', ['2026-09-20', '2026-10-10']);
 
   function reportingApi() {
     if (global.DaymarkReporting) return global.DaymarkReporting;
@@ -80,17 +54,6 @@
     }).formatToParts(parsed);
     const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
     return `${values.year}-${values.month}-${values.day}`;
-  }
-
-  function getChinaHoliday(date) {
-    if (!isDate(date)) return null;
-    return holidayEntries.has(date) ? clone(holidayEntries.get(date)) : null;
-  }
-
-  function isWeekendDate(date) {
-    if (!isDate(date)) return false;
-    const day = new Date(`${date}T00:00:00.000Z`).getUTCDay();
-    return day === 0 || day === 6;
   }
 
   function emptySummary() {
@@ -210,6 +173,11 @@
         inCurrentMonth: cursor.getUTCFullYear() === year && cursor.getUTCMonth() === month - 1,
         isToday: date === today,
         isWeekend: isWeekendDate(date),
+        // A 调休 Saturday is a weekend date but a working day, so the cell must
+        // show only its 班 badge. isOrdinaryWeekend is what the 周末 badge keys off.
+        isOrdinaryWeekend: isOrdinaryWeekend(date),
+        isWorkday: isChinaWorkday(date),
+        restDay: chinaRestDay(date),
         holiday: getChinaHoliday(date),
         rangeCount: detail.range.length,
         metrics: { plannedCount, completedCount, completionRate, actualMinutes },
@@ -229,6 +197,9 @@
     HOLIDAY_SOURCE,
     getChinaHoliday,
     isWeekendDate,
+    isChinaWorkday,
+    chinaRestDay,
+    isOrdinaryWeekend,
     buildMonthGrid,
     buildDateDetail,
   };

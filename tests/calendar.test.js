@@ -5,8 +5,12 @@ const {
   buildMonthGrid,
   getChinaHoliday,
   isWeekendDate,
+  isChinaWorkday,
+  chinaRestDay,
+  isOrdinaryWeekend,
   buildDateDetail,
 } = require('../src/calendar');
+const { isChinaWorkday: planningIsChinaWorkday } = require('../src/planning');
 
 const HISTORY_START = '2025-12-01T00:00:00.000Z';
 
@@ -159,16 +163,62 @@ test('2026 China holiday and makeup-workday data matches the official schedule e
   assert.equal(getChinaHoliday('not-a-date'), null);
 });
 
-test('weekends are derived from the date and remain distinct from holiday and makeup labels', () => {
+test('weekends are derived from the date without claiming anything about days off', () => {
   assert.equal(isWeekendDate('2026-07-18'), true);
   assert.equal(isWeekendDate('2026-07-19'), true);
   assert.equal(isWeekendDate('2026-07-17'), false);
   assert.equal(isWeekendDate('not-a-date'), false);
 
-  assert.equal(isWeekendDate('2026-02-14'), true, 'a makeup Saturday is still visibly a weekend date');
+  assert.equal(isWeekendDate('2026-02-14'), true, 'a makeup Saturday is still a Saturday');
   assert.deepEqual(getChinaHoliday('2026-02-14'), {
     date: '2026-02-14', name: '春节调休', type: 'makeup', badge: '班',
   });
+});
+
+test('rest-day labels follow the statutory calendar, not the raw day of week', () => {
+  // A 调休 Saturday is a mandated workday: no rest-day label, no 周末 badge.
+  assert.equal(isChinaWorkday('2026-02-14'), true);
+  assert.equal(chinaRestDay('2026-02-14'), null);
+  assert.equal(isOrdinaryWeekend('2026-02-14'), false);
+  assert.equal(isOrdinaryWeekend('2026-02-28'), false);
+
+  // A statutory holiday is time off even midweek (2026-10-01 is a Thursday).
+  assert.equal(isWeekendDate('2026-10-01'), false);
+  assert.equal(isChinaWorkday('2026-10-01'), false);
+  assert.deepEqual(chinaRestDay('2026-10-01'), {
+    kind: 'holiday', name: '国庆节', badge: '休', label: '假日安排', short: '假日',
+  });
+  assert.equal(isOrdinaryWeekend('2026-10-01'), false, 'a holiday shows 休, never a stacked 周末 badge');
+
+  // An ordinary weekend is the only case that earns the 周末 label.
+  assert.equal(isChinaWorkday('2026-07-18'), false);
+  assert.deepEqual(chinaRestDay('2026-07-18'), {
+    kind: 'weekend', name: '周末', badge: '周末', label: '周末安排', short: '周末',
+  });
+  assert.equal(isOrdinaryWeekend('2026-07-18'), true);
+
+  // An ordinary workday earns nothing.
+  assert.equal(isChinaWorkday('2026-07-17'), true);
+  assert.equal(chinaRestDay('2026-07-17'), null);
+  assert.equal(chinaRestDay('not-a-date'), null);
+});
+
+test('the scheduler and the review calendar read the same statutory dataset', () => {
+  // planning.js used to keep its own copy of the 2026 holiday table. A silent
+  // divergence there would make the auto-scheduler place work on days the
+  // calendar shows as time off, so assert they agree across the whole year.
+  for (let date = '2026-01-01'; date <= '2026-12-31';) {
+    assert.equal(
+      planningIsChinaWorkday(date),
+      isChinaWorkday(date),
+      `${date} must mean the same thing to the scheduler and the calendar`,
+    );
+    // A day is a workday exactly when it has no rest-day label.
+    assert.equal(isChinaWorkday(date), chinaRestDay(date) === null, date);
+    const next = new Date(`${date}T00:00:00.000Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    date = next.toISOString().slice(0, 10);
+  }
 });
 
 test('buildMonthGrid returns a stable six-week Monday-first grid across month boundaries', () => {
@@ -198,8 +248,18 @@ test('buildMonthGrid returns a stable six-week Monday-first grid across month bo
     assert.equal(typeof cell.isToday, 'boolean');
     assert.equal(typeof cell.isWeekend, 'boolean');
     assert.equal(cell.isWeekend, [0, 6].includes(new Date(`${cell.date}T00:00:00.000Z`).getUTCDay()));
+    assert.equal(cell.isWorkday, chinaRestDay(cell.date) === null);
+    assert.equal(cell.isOrdinaryWeekend, cell.isWeekend && !cell.holiday);
     assert.equal(index % 7, (new Date(`${cell.date}T00:00:00.000Z`).getUTCDay() + 6) % 7);
   });
+
+  // February 2026 is the sharp case: 02-14 and 02-28 are 调休 Saturdays.
+  const makeupSaturday = grid.cells.find((cell) => cell.date === '2026-02-14');
+  assert.equal(makeupSaturday.isWeekend, true);
+  assert.equal(makeupSaturday.isWorkday, true);
+  assert.equal(makeupSaturday.isOrdinaryWeekend, false, 'must not stack 周末 on top of 班');
+  assert.equal(makeupSaturday.restDay, null);
+  assert.equal(makeupSaturday.holiday.badge, '班');
 });
 
 test('a task planned for an ordinary weekend is counted in the weekend calendar cell', () => {

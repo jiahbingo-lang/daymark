@@ -32,6 +32,7 @@ const APP_ASSETS = new Map([
   ['/src/index.html', 'text/html; charset=utf-8'],
   ['/src/styles.css', 'text/css; charset=utf-8'],
   ['/src/domain.js', 'text/javascript; charset=utf-8'],
+  ['/src/china-calendar.js', 'text/javascript; charset=utf-8'],
   ['/src/planning.js', 'text/javascript; charset=utf-8'],
   ['/src/execution.js', 'text/javascript; charset=utf-8'],
   ['/src/daily-planning.js', 'text/javascript; charset=utf-8'],

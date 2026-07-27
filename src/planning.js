@@ -47,34 +47,14 @@
     }
   }
 
-  const holidayDates = new Set();
-  const makeupDates = new Set([
-    '2026-01-04',
-    '2026-02-14',
-    '2026-02-28',
-    '2026-05-09',
-    '2026-09-20',
-    '2026-10-10',
-  ]);
-
-  function addHolidayRange(startDate, endDate) {
-    for (let date = startDate; date <= endDate; date = addDays(date, 1)) holidayDates.add(date);
-  }
-
-  addHolidayRange('2026-01-01', '2026-01-03');
-  addHolidayRange('2026-02-15', '2026-02-23');
-  addHolidayRange('2026-04-04', '2026-04-06');
-  addHolidayRange('2026-05-01', '2026-05-05');
-  addHolidayRange('2026-06-19', '2026-06-21');
-  addHolidayRange('2026-09-25', '2026-09-27');
-  addHolidayRange('2026-10-01', '2026-10-07');
+  // The statutory calendar lives in one place so the scheduler and the review
+  // calendar cannot drift apart. Re-exported below for existing callers.
+  const ChinaCalendar = typeof module !== 'undefined' && module.exports
+    ? require('./china-calendar')
+    : global.DaymarkChinaCalendar;
 
   function isChinaWorkday(date) {
-    if (!isDate(date)) return false;
-    if (makeupDates.has(date)) return true;
-    if (holidayDates.has(date)) return false;
-    const day = new Date(`${date}T00:00:00.000Z`).getUTCDay();
-    return day !== 0 && day !== 6;
+    return isDate(date) && ChinaCalendar.isChinaWorkday(date);
   }
 
   function taskRange(task) {

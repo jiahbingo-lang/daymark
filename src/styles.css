@@ -1436,7 +1436,7 @@ select:focus-visible {
   background: rgba(255, 252, 244, 0.92);
 }
 
-.task-row.is-weekend-plan:not(.is-top3) {
+.task-row.is-restday-plan:not(.is-top3) {
   border-color: rgba(104, 111, 132, 0.18);
 }
 
@@ -1481,7 +1481,7 @@ select:focus-visible {
   font-weight: 720;
 }
 
-.task-meta .weekend-pill {
+.task-meta .restday-pill {
   border: 1px solid rgba(104, 111, 132, 0.22);
   background: rgba(238, 239, 244, 0.96);
   color: #5f6475;
@@ -2407,7 +2407,7 @@ select:focus-visible {
   line-height: 1.4;
 }
 
-.day-detail-weekend {
+.day-detail-restday {
   flex: 0 0 auto;
   padding: 1px 5px;
   border: 1px solid rgba(104, 111, 132, 0.22);
@@ -3211,7 +3211,7 @@ select:focus-visible {
 .execution-top3 { color: #9e6b28; }
 .execution-flag { color: var(--accent-strong); }
 .execution-risk { color: #9d463b; }
-.execution-weekend { color: #666c80; }
+.execution-restday { color: #666c80; }
 
 .execution-block-actions {
   position: absolute;
