@@ -4,6 +4,7 @@ const { sanitizeStore, applyCommand } = require('../src/domain');
 const {
   buildMonthGrid,
   getChinaHoliday,
+  isWeekendDate,
   buildDateDetail,
 } = require('../src/calendar');
 
@@ -158,6 +159,18 @@ test('2026 China holiday and makeup-workday data matches the official schedule e
   assert.equal(getChinaHoliday('not-a-date'), null);
 });
 
+test('weekends are derived from the date and remain distinct from holiday and makeup labels', () => {
+  assert.equal(isWeekendDate('2026-07-18'), true);
+  assert.equal(isWeekendDate('2026-07-19'), true);
+  assert.equal(isWeekendDate('2026-07-17'), false);
+  assert.equal(isWeekendDate('not-a-date'), false);
+
+  assert.equal(isWeekendDate('2026-02-14'), true, 'a makeup Saturday is still visibly a weekend date');
+  assert.deepEqual(getChinaHoliday('2026-02-14'), {
+    date: '2026-02-14', name: '春节调休', type: 'makeup', badge: '班',
+  });
+});
+
 test('buildMonthGrid returns a stable six-week Monday-first grid across month boundaries', () => {
   const grid = buildMonthGrid({
     year: 2026,
@@ -183,7 +196,29 @@ test('buildMonthGrid returns a stable six-week Monday-first grid across month bo
     assert.equal(cell.day, Number(cell.date.slice(-2)));
     assert.equal(typeof cell.inCurrentMonth, 'boolean');
     assert.equal(typeof cell.isToday, 'boolean');
+    assert.equal(typeof cell.isWeekend, 'boolean');
+    assert.equal(cell.isWeekend, [0, 6].includes(new Date(`${cell.date}T00:00:00.000Z`).getUTCDay()));
     assert.equal(index % 7, (new Date(`${cell.date}T00:00:00.000Z`).getUTCDay() + 6) % 7);
+  });
+});
+
+test('a task planned for an ordinary weekend is counted in the weekend calendar cell', () => {
+  const weekendTask = task('weekend-task', '周末处理发布检查', {
+    plannedDate: '2026-07-18',
+    estimateMinutes: 60,
+  });
+  const source = store({ tasks: [weekendTask] });
+
+  const grid = buildMonthGrid({ year: 2026, month: 7, store: source, today: '2026-07-17' });
+  const saturday = grid.cells.find((cell) => cell.date === '2026-07-18');
+
+  assert.equal(saturday.isWeekend, true);
+  assert.equal(saturday.holiday, null);
+  assert.deepEqual(saturday.metrics, {
+    plannedCount: 1,
+    completedCount: 0,
+    completionRate: 0,
+    actualMinutes: 0,
   });
 });
 
@@ -363,6 +398,37 @@ test('calendar withdraws an archived completion after the task is restored to To
   assert.equal(detail.summary.completedCount, 0);
   assert.equal(detail.summary.completedMinutes, 0);
   assert.deepEqual(cell.metrics, { plannedCount: 1, completedCount: 0, completionRate: 0, actualMinutes: 0 });
+});
+
+test('calendar counts a reopened task when its current final state is completed again', () => {
+  const completed = task('recompleted', '恢复后再次完成', {
+    plannedDate: '2026-02-16',
+    top3Date: '2026-02-16',
+    estimateMinutes: 45,
+    status: 'completed',
+    completedAt: '2026-02-16T10:00:00.000Z',
+  });
+  const archived = dailyRecord('2026-02-16', {
+    planned: [completed],
+    completed: [completed],
+  });
+  archived.top3 = [completed];
+  archived.reopened = [completed];
+  const source = store({
+    tasks: [completed],
+    dailyArchives: [archived],
+  });
+
+  const detail = buildDateDetail(source, '2026-02-16');
+  const grid = buildMonthGrid({ year: 2026, month: 2, today: '2026-02-17', store: source });
+  const cell = grid.cells.find((entry) => entry.date === '2026-02-16');
+
+  assert.equal(detail.summary.reopenedCount, 1, 'reopen audit history is retained');
+  assert.equal(detail.summary.completedPlannedCount, 1);
+  assert.equal(detail.summary.completionRate, 100);
+  assert.equal(detail.summary.top3CompletedCount, 1);
+  assert.equal(detail.summary.top3CompletionRate, 100);
+  assert.deepEqual(cell.metrics, { plannedCount: 1, completedCount: 1, completionRate: 100, actualMinutes: 0 });
 });
 
 test('calendar withdraws an archived plan after the task is moved to Inbox', () => {

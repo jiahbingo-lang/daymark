@@ -87,6 +87,12 @@
     return holidayEntries.has(date) ? clone(holidayEntries.get(date)) : null;
   }
 
+  function isWeekendDate(date) {
+    if (!isDate(date)) return false;
+    const day = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+    return day === 0 || day === 6;
+  }
+
   function emptySummary() {
     return {
       plannedCount: 0,
@@ -203,6 +209,7 @@
         day: cursor.getUTCDate(),
         inCurrentMonth: cursor.getUTCFullYear() === year && cursor.getUTCMonth() === month - 1,
         isToday: date === today,
+        isWeekend: isWeekendDate(date),
         holiday: getChinaHoliday(date),
         rangeCount: detail.range.length,
         metrics: { plannedCount, completedCount, completionRate, actualMinutes },
@@ -221,6 +228,7 @@
   const api = {
     HOLIDAY_SOURCE,
     getChinaHoliday,
+    isWeekendDate,
     buildMonthGrid,
     buildDateDetail,
   };

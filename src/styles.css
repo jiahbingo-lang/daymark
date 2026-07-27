@@ -1436,6 +1436,10 @@ select:focus-visible {
   background: rgba(255, 252, 244, 0.92);
 }
 
+.task-row.is-weekend-plan:not(.is-top3) {
+  border-color: rgba(104, 111, 132, 0.18);
+}
+
 .top3-star {
   color: #b8792d;
   font-size: 13px;
@@ -1474,6 +1478,13 @@ select:focus-visible {
   border: 1px solid rgba(71, 107, 82, 0.2);
   background: rgba(234, 243, 236, 0.92);
   color: #416b4b;
+  font-weight: 720;
+}
+
+.task-meta .weekend-pill {
+  border: 1px solid rgba(104, 111, 132, 0.22);
+  background: rgba(238, 239, 244, 0.96);
+  color: #5f6475;
   font-weight: 720;
 }
 
@@ -2134,6 +2145,11 @@ select:focus-visible {
   background: #f1cdbb;
 }
 
+.legend-swatch.weekend {
+  border: 1px solid rgba(104, 111, 132, 0.22);
+  background: #e4e6ee;
+}
+
 .legend-swatch.makeup {
   background: #c6ddc9;
 }
@@ -2201,6 +2217,11 @@ select:focus-visible {
   color: #fff;
 }
 
+.calendar-day.is-weekend {
+  border-color: rgba(104, 111, 132, 0.2);
+  background: rgba(232, 233, 239, 0.58);
+}
+
 .calendar-day.is-holiday {
   background: rgba(241, 205, 187, 0.34);
 }
@@ -2227,6 +2248,14 @@ select:focus-visible {
   gap: 3px;
 }
 
+.calendar-day-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+
 .day-number {
   font-family: Georgia, "Times New Roman", serif;
   font-size: 13px;
@@ -2246,6 +2275,12 @@ select:focus-visible {
 .day-badge.is-makeup {
   background: #cbe0cd;
   color: #3b6245;
+}
+
+.day-badge.is-weekend {
+  border: 1px solid rgba(104, 111, 132, 0.2);
+  background: rgba(238, 239, 244, 0.96);
+  color: #5f6475;
 }
 
 .day-tally {
@@ -2367,6 +2402,18 @@ select:focus-visible {
   border-radius: 5px;
   background: rgba(234, 243, 236, 0.92);
   color: #416b4b;
+  font-size: 8px;
+  font-weight: 760;
+  line-height: 1.4;
+}
+
+.day-detail-weekend {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid rgba(104, 111, 132, 0.22);
+  border-radius: 5px;
+  background: rgba(238, 239, 244, 0.96);
+  color: #5f6475;
   font-size: 8px;
   font-weight: 760;
   line-height: 1.4;
@@ -3075,6 +3122,7 @@ select:focus-visible {
 
 .execution-day-header span.is-holiday { color: #b14f45; }
 .execution-day-header span.is-makeup { color: #4c708c; }
+.execution-day-header span.is-weekend { color: #666c80; font-weight: 700; }
 .execution-day-header small.is-overload { color: #b14f45; font-weight: 700; }
 
 .execution-day-body {
@@ -3163,6 +3211,7 @@ select:focus-visible {
 .execution-top3 { color: #9e6b28; }
 .execution-flag { color: var(--accent-strong); }
 .execution-risk { color: #9d463b; }
+.execution-weekend { color: #666c80; }
 
 .execution-block-actions {
   position: absolute;
