@@ -8,7 +8,7 @@
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Daymark</title>
-    <link rel="stylesheet" href="./styles.css?v=7" />
+    <link rel="stylesheet" href="./styles.css?v=8" />
   </head>
   <body>
     <div class="app-shell">
@@ -552,16 +552,17 @@
     </div>
 
     <pre id="app-debug-state" hidden aria-hidden="true"></pre>
-    <script src="./domain.js?v=3"></script>
-    <!-- china-calendar owns the statutory holiday data; it must load before
-         planning.js and calendar.js, which both read from it. -->
+    <!-- china-calendar owns the statutory holiday data. It has no dependencies
+         and must load first: domain.js, planning.js and calendar.js all read
+         the work calendar from it. -->
     <script src="./china-calendar.js?v=1"></script>
+    <script src="./domain.js?v=4"></script>
     <script src="./planning.js?v=4"></script>
     <script src="./execution.js?v=3"></script>
     <script src="./daily-planning.js?v=2"></script>
     <script src="./reporting.js?v=3"></script>
     <script src="./calendar.js?v=5"></script>
     <script src="./ai-report.js?v=3"></script>
-    <script src="./renderer.js?v=12"></script>
+    <script src="./renderer.js?v=13"></script>
   </body>
 </html>

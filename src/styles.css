@@ -2407,18 +2407,6 @@ select:focus-visible {
   line-height: 1.4;
 }
 
-.day-detail-restday {
-  flex: 0 0 auto;
-  padding: 1px 5px;
-  border: 1px solid rgba(104, 111, 132, 0.22);
-  border-radius: 5px;
-  background: rgba(238, 239, 244, 0.96);
-  color: #5f6475;
-  font-size: 8px;
-  font-weight: 760;
-  line-height: 1.4;
-}
-
 .day-detail-phase,
 .day-detail-minutes,
 .day-detail-overflow {

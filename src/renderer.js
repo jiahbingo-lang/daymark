@@ -1307,7 +1307,6 @@ function renderDayDetail() {
       planned: plannedIds.has(task.id),
       top3: top3Ids.has(task.id) || task.top3Date === date,
       flagged: Boolean(task.flagged),
-      restLabel: restDay ? restDay.label : null,
       phase: task.schedulePhase || null,
       minutes: Number(task.scheduledMinutes) || 0,
       needsEstimate: Boolean(task.scheduleNeedsEstimate),
@@ -1324,7 +1323,6 @@ function renderDayDetail() {
       planned: false,
       top3: false,
       flagged: false,
-      restLabel: restDay ? restDay.label : null,
       phase: null,
       minutes: 0,
       needsEstimate: false,
@@ -1348,14 +1346,12 @@ function renderDayDetail() {
   elements.dayDetailScore.textContent = `完成 ${completed.length} · 计划 ${plannedCount} · 实际 ${Number(detail.summary?.actualMinutes) || 0} 分钟`;
   elements.dayDetailNote.textContent = detail.dailyNotes
     || (holiday ? `${holiday.name}${holiday.type === 'makeup' ? '，当天按调休工作日标注，不计入休息日。' : '，当天按法定假日标注。'}` : '')
-    || (restDay ? `${restDay.name}；安排在当天的任务会显示“${restDay.label}”标签。` : '')
     || (detail.dataIntegrity?.complete === false ? detail.dataIntegrity.message : '当天没有填写每日备注。');
 
   const fragment = document.createDocumentFragment();
   items.forEach((item) => {
     const row = makeElement('li', `day-detail-task${item.done ? '' : ' is-open'}${item.top3 ? ' is-top3' : ''}${item.flagged ? ' is-flagged' : ''}${!item.planned && !item.done ? ' is-range-only' : ''}`);
     const content = makeElement('span', 'day-detail-task-content');
-    if (item.restLabel) content.appendChild(makeElement('span', 'day-detail-restday', item.restLabel));
     if (item.top3) content.appendChild(makeElement('span', 'day-detail-top3', '★ Top 3'));
     if (item.flagged) content.appendChild(makeElement('span', 'day-detail-flagged', '⚑ 旗标'));
     const phaseLabels = { single: '单日', start: '开始', middle: '进行中', deadline: '截止' };

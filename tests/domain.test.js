@@ -544,6 +544,26 @@ test('recurrence dates handle weekdays and month ends', () => {
   assert.equal(nextRecurringDate({ plannedDate: '2026-07-15', repeatRule: null }), null);
 });
 
+test('the weekdays rule follows the China work calendar, not plain Monday-Friday', () => {
+  // Statutory holidays are skipped: 2026-09-30 is a Wednesday and the National
+  // Day break runs 10-01 to 10-07, so the next occurrence is 10-08.
+  assert.equal(nextRecurringDate({ plannedDate: '2026-09-30', repeatRule: 'weekdays' }), '2026-10-08');
+
+  // 调休 Saturdays are working days and must be landed on, not skipped.
+  assert.equal(nextRecurringDate({ plannedDate: '2026-02-13', repeatRule: 'weekdays' }), '2026-02-14');
+  assert.equal(nextRecurringDate({ plannedDate: '2026-10-09', repeatRule: 'weekdays' }), '2026-10-10');
+
+  // From the 调休 Saturday that opens Spring Festival, the whole 02-15 to 02-23
+  // break is skipped and the next working day is Tuesday 02-24.
+  assert.equal(nextRecurringDate({ plannedDate: '2026-02-14', repeatRule: 'weekdays' }), '2026-02-24');
+
+  // Ordinary weekends are still skipped when no statutory entry applies.
+  assert.equal(nextRecurringDate({ plannedDate: '2026-07-18', repeatRule: 'weekdays' }), '2026-07-20');
+
+  // Years with no statutory data fall back to Monday-Friday instead of failing.
+  assert.equal(nextRecurringDate({ plannedDate: '2030-03-01', repeatRule: 'weekdays' }), '2030-03-04');
+});
+
 test('the domain bundle exposes the same API directly in a browser context', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'domain.js'), 'utf8');
   const context = vm.createContext({ window: {} });

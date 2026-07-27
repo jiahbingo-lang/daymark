@@ -974,6 +974,28 @@
     return date.toISOString().slice(0, 10);
   }
 
+  // Resolved lazily: domain.js is the first script the page loads, so the
+  // shared calendar is not on `global` yet at definition time. If it is
+  // unavailable the workday test degrades to plain Monday–Friday rather than
+  // failing, which is the behaviour this module had before.
+  function chinaCalendarApi() {
+    if (global.DaymarkChinaCalendar) return global.DaymarkChinaCalendar;
+    if (typeof require === 'function') {
+      try {
+        return require('./china-calendar');
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function isRecurrenceWorkday(date) {
+    const api = chinaCalendarApi();
+    if (api && typeof api.isChinaWorkday === 'function') return api.isChinaWorkday(date);
+    return ![0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay());
+  }
+
   function nextRecurringDate(task, fallbackDate = localDate()) {
     const repeatRule = task?.repeatRule;
     const rule = typeof repeatRule === 'string' ? repeatRule : repeatRule?.frequency;
@@ -981,8 +1003,14 @@
     if (!rule) return null;
     if (rule === 'daily') return addDays(base, 1);
     if (rule === 'weekdays') {
+      // "每个工作日" means China's work calendar, the same one the scheduler
+      // uses: skip statutory holidays, and land on 调休 Saturdays because those
+      // are mandated working days. The bound is far above the longest statutory
+      // break and only exists so bad calendar data cannot hang the loop.
       let candidate = addDays(base, 1);
-      while ([0, 6].includes(new Date(`${candidate}T00:00:00Z`).getUTCDay())) candidate = addDays(candidate, 1);
+      for (let step = 0; step < 30 && !isRecurrenceWorkday(candidate); step += 1) {
+        candidate = addDays(candidate, 1);
+      }
       return candidate;
     }
     if (rule === 'weekly') return addDays(base, 7);
