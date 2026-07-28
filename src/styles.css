@@ -745,15 +745,40 @@ kbd {
 }
 
 .details-header {
+  /* The panel scrolls, and the close button lives in this header. Reaching the
+     notes and completion-note fields scrolls it off the top of the window,
+     which left no way to dismiss the panel with the mouse. Pin it instead.
+     The negative margins let the opaque background span the panel's own
+     padding, so fields scroll underneath it rather than through it, and the
+     matching padding keeps the row at the exact position it had before. */
+  position: sticky;
+  top: 0;
+  z-index: 6;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 25px;
+  margin: 0 -24px 25px;
+  padding: 10px 24px 11px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
   color: var(--muted);
   font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+/* The header pins below the panel's 58px top inset, so the inset itself is left
+   uncovered once the content scrolls up into it. Extend the opaque background
+   over that strip, otherwise the title field shows through above the header. */
+.details-header::before {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  height: 58px;
+  background: var(--panel);
+  content: "";
 }
 
 /* Shown at every width. The button lives inside .details-form, which is hidden
