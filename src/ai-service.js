@@ -754,5 +754,6 @@ function createAiService(options = {}) {
 module.exports = {
   AiServiceError,
   ERROR_CODES,
+  DEFAULT_MODEL,
   createAiService,
 };

@@ -26,9 +26,14 @@ function commandId(prefix = 'event') {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+// The model shown before the main process reports saved AI settings. This is
+// the renderer's only copy of the default, so it cannot drift away from
+// DEFAULT_MODEL in src/ai-service.js.
+const DEFAULT_AI_MODEL = 'gpt-5.6-terra';
+
 let previewStore;
 let previewAiSettings = {
-  model: 'gpt-5.6-terra',
+  model: DEFAULT_AI_MODEL,
   hasKey: false,
   keySource: 'none',
   includeDailyNotes: false,
@@ -186,7 +191,7 @@ const state = {
   reportPeriodKey: '',
   reportSource: null,
   aiSettings: {
-    model: 'gpt-5.6-terra',
+    model: DEFAULT_AI_MODEL,
     hasKey: false,
     keySource: 'none',
     includeDailyNotes: false,
@@ -2562,7 +2567,7 @@ function coerceAiSettings(result) {
   return {
     ...state.aiSettings,
     ...candidate,
-    model: String(candidate.model || state.aiSettings.model || 'gpt-5.6-terra'),
+    model: String(candidate.model || state.aiSettings.model || DEFAULT_AI_MODEL),
     keySource,
     hasKey: usableKey,
     includeDailyNotes: Boolean(candidate.includeDailyNotes),
@@ -2574,7 +2579,8 @@ async function loadAiSettings() {
   if (typeof bridge.getAiSettings !== 'function') return;
   try {
     state.aiSettings = coerceAiSettings(await bridge.getAiSettings());
-    elements.aiModel.value = state.aiSettings.model || 'gpt-5.6-terra';
+    elements.aiModel.placeholder = DEFAULT_AI_MODEL;
+    elements.aiModel.value = state.aiSettings.model || DEFAULT_AI_MODEL;
     elements.includeDailyNotes.checked = Boolean(state.aiSettings.includeDailyNotes);
     elements.includeCompletionNotes.checked = state.aiSettings.includeCompletionNotes !== false;
     renderAiSettingsStatus();
@@ -2586,7 +2592,7 @@ async function loadAiSettings() {
 
 async function saveAiPreferences() {
   const settings = {
-    model: elements.aiModel.value.trim() || 'gpt-5.6-terra',
+    model: elements.aiModel.value.trim() || DEFAULT_AI_MODEL,
     includeDailyNotes: elements.includeDailyNotes.checked,
     includeCompletionNotes: elements.includeCompletionNotes.checked,
   };

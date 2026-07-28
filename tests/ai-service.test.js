@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { createAiService, ERROR_CODES } = require('../src/ai-service');
+const { createAiService, ERROR_CODES, DEFAULT_MODEL } = require('../src/ai-service');
 
 const SECRET_KEY = 'sk-test-never-print-this-secret';
 const NOW = new Date('2026-07-15T20:00:00.000Z');
@@ -136,7 +136,7 @@ test('settings use a separate atomic 0600 file, expose no secret, and clear ciph
   assert.deepEqual(await context.service.getSettings(), {
     provider: 'openai',
     endpoint: 'http://127.0.0.1:43210/v1',
-    model: 'gpt-5.6-terra',
+    model: DEFAULT_MODEL,
     includeCompletionNotes: true,
     includeDailyNotes: false,
     hasStoredKey: false,
@@ -147,7 +147,7 @@ test('settings use a separate atomic 0600 file, expose no secret, and clear ciph
 
   const saved = await context.service.saveSettings({
     apiKey: SECRET_KEY,
-    model: 'gpt-5.6-terra',
+    model: DEFAULT_MODEL,
     includeCompletionNotes: false,
     includeDailyNotes: true,
   });
@@ -202,7 +202,7 @@ test('Responses request has bounded shape and strips excluded or sensitive field
 
   const result = await context.service.generateReport('window-1', { sourceData: reportSource() });
   assert.equal(result.text, '# Q2 工作总结\n\n全部完成。');
-  assert.equal(result.model, 'gpt-5.6-terra');
+  assert.equal(result.model, DEFAULT_MODEL);
   assert.deepEqual(result.usage, { input_tokens: 120, output_tokens: 30, total_tokens: 150 });
   assert.equal(observed.url, '/v1/responses');
   assert.equal(observed.method, 'POST');
@@ -211,7 +211,7 @@ test('Responses request has bounded shape and strips excluded or sensitive field
   assert.equal(transportOptions.redirect, 'error');
   assert.equal(transportOptions.credentials, 'omit');
   assert.equal(transportOptions.cache, 'no-store');
-  assert.equal(observed.body.model, 'gpt-5.6-terra');
+  assert.equal(observed.body.model, DEFAULT_MODEL);
   assert.equal(observed.body.store, false);
   assert.equal(observed.body.max_output_tokens, 2200);
   assert.match(observed.body.instructions, /JSON.*数据/);

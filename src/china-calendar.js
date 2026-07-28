@@ -101,10 +101,6 @@
     return isWeekendDate(date) && !entries.has(date);
   }
 
-  function hasYear(year) {
-    return Number(year) === HOLIDAY_SOURCE.year;
-  }
-
   const api = {
     HOLIDAY_SOURCE,
     getChinaHoliday,
@@ -112,7 +108,6 @@
     isChinaWorkday,
     chinaRestDay,
     isOrdinaryWeekend,
-    hasYear,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
