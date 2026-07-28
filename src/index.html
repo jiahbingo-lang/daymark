@@ -563,6 +563,12 @@
     <script src="./reporting.js?v=3"></script>
     <script src="./calendar.js?v=5"></script>
     <script src="./ai-report.js?v=3"></script>
-    <script src="./renderer.js?v=14"></script>
+    <!-- Load order matters: renderer.js defines the shared state and elements,
+         renderer-execution.js registers its listeners against them, and
+         renderer-boot.js starts the app once both are evaluated. -->
+    <script src="./renderer.js?v=16"></script>
+    <script src="./renderer-review.js?v=1"></script>
+    <script src="./renderer-execution.js?v=2"></script>
+    <script src="./renderer-boot.js?v=1"></script>
   </body>
 </html>

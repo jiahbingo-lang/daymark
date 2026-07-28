@@ -40,6 +40,9 @@ const APP_ASSETS = new Map([
   ['/src/calendar.js', 'text/javascript; charset=utf-8'],
   ['/src/ai-report.js', 'text/javascript; charset=utf-8'],
   ['/src/renderer.js', 'text/javascript; charset=utf-8'],
+  ['/src/renderer-review.js', 'text/javascript; charset=utf-8'],
+  ['/src/renderer-execution.js', 'text/javascript; charset=utf-8'],
+  ['/src/renderer-boot.js', 'text/javascript; charset=utf-8'],
 ]);
 
 protocol.registerSchemesAsPrivileged([
@@ -68,6 +71,7 @@ let mainWindow;
 let todoStore;
 let aiService;
 let reminderTimer;
+let reminderInFlight = false;
 let aiGenerationLocked = false;
 const activeAiRequests = new Map();
 
@@ -1058,13 +1062,16 @@ async function deliverDueReminders() {
     return new Date(task.reminderFiredAt) < reminder;
   });
   for (const task of due) {
-    new Notification({ title: task.title, body: task.area ? `${task.area} · Daymark 提醒` : 'Daymark 提醒' }).show();
+    // Record first, then notify. todoStore.load() serves a cached snapshot
+    // until a write lands, so notifying first leaves a window where the next
+    // tick still sees the reminder as unfired and shows it again.
     await todoStore.execute({
       type: 'markReminderFired',
       eventId: `reminder-${task.id}-${task.reminderAt}`,
       taskId: task.id,
       occurredAt: now.toISOString(),
     });
+    new Notification({ title: task.title, body: task.area ? `${task.area} · Daymark 提醒` : 'Daymark 提醒' }).show();
   }
 }
 
@@ -1075,20 +1082,28 @@ async function deliverEndOfDayReminder() {
   const evaluation = evaluateEndOfDayReminder(store, now, { timeZone: DAYMARK_TIME_ZONE });
   if (!evaluation.due) return;
   const copy = notificationCopy(evaluation);
-  const notification = new Notification({ title: copy.title, body: copy.body });
-  notification.on('click', showAndFocusDailyShutdown);
-  notification.show();
   await todoStore.execute({
     type: 'markEndOfDayReminderFired',
     eventId: `end-of-day-reminder-${evaluation.date}`,
     occurredAt: now.toISOString(),
     payload: { date: evaluation.date },
   });
+  const notification = new Notification({ title: copy.title, body: copy.body });
+  notification.on('click', showAndFocusDailyShutdown);
+  notification.show();
 }
 
 async function deliverScheduledReminders() {
-  await deliverDueReminders();
-  await deliverEndOfDayReminder();
+  // The 30s interval can fire again while a slow write is still queued. Without
+  // this guard both passes read the same pre-write snapshot and notify twice.
+  if (reminderInFlight) return;
+  reminderInFlight = true;
+  try {
+    await deliverDueReminders();
+    await deliverEndOfDayReminder();
+  } finally {
+    reminderInFlight = false;
+  }
 }
 
 function startReminderScheduler() {
