@@ -756,8 +756,12 @@ kbd {
   text-transform: uppercase;
 }
 
-.mobile-close {
-  display: none;
+/* Shown at every width. The button lives inside .details-form, which is hidden
+   until a task is open, so it appears exactly when there is something to close.
+   Hiding it above the overlay breakpoint left the docked panel with no mouse
+   affordance at all — Escape was the only way out. */
+.details-close {
+  display: grid;
   width: 28px;
   height: 28px;
   border-radius: 8px;
@@ -1029,10 +1033,6 @@ kbd {
 
   .details-panel.is-open {
     transform: translateX(0);
-  }
-
-  .mobile-close {
-    display: grid;
   }
 }
 
